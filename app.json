@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "F1 赛历",
+    "slug": "f1-season-guide",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "platforms": ["android", "web"],
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
