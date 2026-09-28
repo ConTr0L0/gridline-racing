@@ -1,11 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFonts } from 'expo-font';
+import * as Updates from 'expo-updates';
 import { StatusBar } from 'expo-status-bar';
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
-  ActivityIndicator,
   AccessibilityInfo,
+  Alert,
   Animated,
   Easing,
   Image,
@@ -38,7 +39,12 @@ const C = {
 };
 
 const MotionPreferenceContext = createContext(false);
+const ThemeRevisionContext = createContext(false);
 const useNativeDriver = Platform.OS !== 'web';
+
+function useThemeRevision() {
+  useContext(ThemeRevisionContext);
+}
 
 type Section = 'home' | 'schedule' | 'live' | 'favorites' | 'standings' | 'library' | 'settings';
 type ThemeMode = 'system' | 'light' | 'dark';
@@ -772,6 +778,7 @@ function MotionPanel({ motionKey, children }: { motionKey: string; children: Rea
 const F1_LIVE_TIMING_URL = 'https://www.formula1.com/en/timing/f1-live-lite?os=http';
 
 function LiveTimingPage() {
+  useThemeRevision();
   const openOfficialPage = () => {
     void Linking.openURL(F1_LIVE_TIMING_URL).catch((error) => console.warn('F1 official page could not be opened:', error));
   };
@@ -1183,6 +1190,7 @@ function TeamCard({ team, drivers, compact, favorite, onFavorite, onPress }: { t
 }
 
 function SchedulePage({ filter, onFilterChange, onOpenRace }: { filter: ScheduleFilter; onFilterChange: (filter: ScheduleFilter) => void; onOpenRace: (race: Race) => void }) {
+  useThemeRevision();
   const { races, status, reload } = useSeason();
   const visibleRaces = races.filter((race) => race.finished === (filter === 'finished'));
   return (
@@ -1226,9 +1234,34 @@ function SchedulePage({ filter, onFilterChange, onOpenRace }: { filter: Schedule
 }
 
 function SettingsPage({ themeMode, onThemeModeChange }: { themeMode: ThemeMode; onThemeModeChange: (mode: ThemeMode) => void }) {
+  useThemeRevision();
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const themeDescription = themeMode === 'system'
     ? '跟随设备外观，并在系统主题变化时自动切换。'
     : themeMode === 'light' ? '日间模式已启用。' : '夜间模式已启用。';
+  const checkForUpdate = async () => {
+    if (Platform.OS !== 'android' || __DEV__ || !Updates.isEnabled) {
+      Alert.alert('当前环境暂不支持更新', '请在已安装的 Android 发布版中检查更新；Expo Go 和开发版不支持。');
+      return;
+    }
+    setCheckingUpdate(true);
+    try {
+      const update = await Updates.checkForUpdateAsync();
+      if (!update.isAvailable) {
+        Alert.alert('已是最新版本', '当前没有可用更新。');
+        return;
+      }
+      await Updates.fetchUpdateAsync();
+      Alert.alert('更新已下载', '立即重启应用以应用更新？', [
+        { text: '稍后', style: 'cancel' },
+        { text: '立即重启', onPress: () => { void Updates.reloadAsync().catch((error) => Alert.alert('重启失败', String(error))); } },
+      ]);
+    } catch (error) {
+      Alert.alert('检查更新失败', error instanceof Error ? error.message : '请稍后重试。');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
   return (
     <ScrollView contentContainerStyle={styles.pageContent} showsVerticalScrollIndicator={false}>
       <ScreenHeader eyebrow="F1 · 偏好设置" title="设置" />
@@ -1243,14 +1276,50 @@ function SettingsPage({ themeMode, onThemeModeChange }: { themeMode: ThemeMode; 
         <Segment items={[{ id: 'system', label: '跟随系统' }, { id: 'light', label: '日间模式' }, { id: 'dark', label: '夜间模式' }]} selected={themeMode} onSelect={onThemeModeChange} />
         <Text style={styles.settingsHint}>{themeDescription}</Text>
       </View>
+      {Platform.OS === 'android' ? <View style={styles.settingsCard}>
+        <View style={styles.settingsHeader}>
+          <View style={styles.settingsIcon}><Glyph path="M12 3v12m0 0 5-5m-5 5-5-5M4 17v3h16v-3" color={C.red} size={20} /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.settingsTitle}>应用更新</Text>
+            <Text style={styles.settingsDescription}>检查并应用 Android 发布版更新</Text>
+          </View>
+        </View>
+        <Pressable accessibilityRole="button" accessibilityState={{ disabled: checkingUpdate }} disabled={checkingUpdate} onPress={() => void checkForUpdate()} style={[styles.noSeasonButton, checkingUpdate && { opacity: 0.65 }]}>
+          <Text style={styles.noSeasonButtonText}>{checkingUpdate ? '正在检查…' : '检查更新'}</Text>
+        </Pressable>
+      </View> : null}
     </ScrollView>
   );
 }
 
-function HomePage({ onOpenRace, onGoSchedule, active }: { onOpenRace: (race: Race) => void; onGoSchedule: () => void; active: boolean }) {
+function HomePage({ onOpenRace, onGoSchedule, active, introComplete }: { onOpenRace: (race: Race) => void; onGoSchedule: () => void; active: boolean; introComplete: boolean }) {
+  useThemeRevision();
   const { races, drivers, teams, resultsBySession, status, loadSessionResults, reload } = useSeason();
   const [now, setNow] = useState(Date.now());
   const [refreshingResults, setRefreshingResults] = useState(false);
+  const reduceMotion = useContext(MotionPreferenceContext);
+  const entrance = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+  const entrancePlayed = useRef(false);
+
+  useEffect(() => {
+    if (!active || !introComplete || entrancePlayed.current) {
+      if (reduceMotion) entrance.forEach((progress) => progress.setValue(1));
+      return;
+    }
+    entrancePlayed.current = true;
+    if (reduceMotion) {
+      entrance.forEach((progress) => progress.setValue(1));
+      return;
+    }
+    const animation = Animated.sequence(entrance.slice().reverse().map((progress) => Animated.timing(progress, {
+      toValue: 1,
+      duration: 170,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver,
+    })));
+    animation.start();
+    return () => animation.stop();
+  }, [active, introComplete, reduceMotion, entrance]);
 
   useEffect(() => {
     if (!active) return;
@@ -1313,12 +1382,15 @@ function HomePage({ onOpenRace, onGoSchedule, active }: { onOpenRace: (race: Rac
 
   return (
     <ScrollView style={styles.homePage} contentContainerStyle={styles.homeContent} showsVerticalScrollIndicator={false}>
+      <Animated.View style={homeEntranceStyle(entrance[0]!, -1.6)}>
       <View style={styles.homeHeader}>
         <View><Text style={styles.homeEyebrow}>F1 · 2026 SEASON</Text><Text style={styles.homeTitle}>首页</Text></View>
         <Pressable accessibilityRole="button" onPress={onGoSchedule} style={styles.homeScheduleLink}><Glyph path={navItems[1].icon} color={C.red} size={16} /><Text style={styles.homeScheduleLinkText}>赛事列表 ›</Text></Pressable>
       </View>
+      </Animated.View>
 
       {featuredRace ? <>
+        <Animated.View style={homeEntranceStyle(entrance[1]!, 1.2)}>
         <View style={styles.homeHero}>
           <View style={styles.homeHeroTop}>
             <Text style={styles.homeHeroKicker}>第 {String(featuredRace.round).padStart(2, '0')} 站 · {currentRace ? currentSession ? '正在进行' : '赛事周末' : showsPreviousResult ? '上一站赛果' : '下一站'}</Text>
@@ -1362,6 +1434,8 @@ function HomePage({ onOpenRace, onGoSchedule, active }: { onOpenRace: (race: Rac
           </View> : <Text style={styles.homeSchedulePending}>详细场次时间联网同步后显示</Text>}
         </View>
 
+        </Animated.View>
+        <Animated.View style={homeEntranceStyle(entrance[2]!, -0.9)}>
         <View style={styles.homeSectionHeading}><View><Text style={styles.homeSectionTitle}>赛事时间安排</Text><Text style={styles.homeSectionSubtitle}>{featuredRace.dates || '日期待同步'} · 手机本地时间</Text></View><Text style={styles.homeSectionMark}>◷</Text></View>
         {featuredRace.sessions.length ? Array.from(new Set(featuredRace.sessions.map((session) => session.day))).map((day) => (
           <View key={day} style={styles.homeDayGroup}>
@@ -1378,18 +1452,27 @@ function HomePage({ onOpenRace, onGoSchedule, active }: { onOpenRace: (race: Rac
             })}
           </View>
         )) : <View style={styles.homeSchedulePendingCard}><Text style={styles.homeSchedulePending}>赛历快照暂不包含分场时间</Text><Pressable accessibilityRole="button" onPress={reload}><Text style={styles.homeRetryText}>重新同步赛程 ↻</Text></Pressable></View>}
+        </Animated.View>
 
-        {showsNextPreview && nextRace ? <View style={styles.homeNextSection}>
+        {showsNextPreview && nextRace ? <Animated.View style={homeEntranceStyle(entrance[3]!, 0.8)}><View style={styles.homeNextSection}>
           <View style={styles.homeSectionHeading}><View><Text style={styles.homeSectionTitle}>下一站预告</Text><Text style={styles.homeSectionSubtitle}>NEXT GRAND PRIX</Text></View><Text style={styles.homeSectionMark}>↗</Text></View>
           <Pressable accessibilityRole="button" onPress={() => onOpenRace(nextRace)} style={styles.homeNextCard}>
             <CountryFlag race={nextRace} />
             <View style={styles.homeNextCopy}><Text style={styles.homeNextTitle}>{nextRace.name}</Text><Text style={styles.homeNextVenue}>{nextRace.venue} · {nextRace.country}</Text><Text style={styles.homeNextDate}>{nextRace.dates}{nextRaceSession ? ` · ${formatTime(nextRaceSession.at)}` : ''}</Text></View>
             <Text style={styles.homeNextArrow}>›</Text>
           </Pressable>
-        </View> : null}
-      </> : <View style={styles.homeEmpty}><Text style={styles.homeSectionTitle}>暂无可显示的赛程</Text><Text style={styles.homeSectionSubtitle}>连接赛季数据后，这里会显示正在进行的赛事、赛果和下一站预告。</Text><Pressable accessibilityRole="button" onPress={reload} style={styles.homePrimaryButton}><Text style={styles.homePrimaryButtonText}>重新同步赛程</Text></Pressable></View>}
+        </View></Animated.View> : null}
+      </> : <Animated.View style={homeEntranceStyle(entrance[1]!)}><View style={styles.homeEmpty}><Text style={styles.homeSectionTitle}>暂无可显示的赛程</Text><Text style={styles.homeSectionSubtitle}>连接赛季数据后，这里会显示正在进行的赛事、赛果和下一站预告。</Text><Pressable accessibilityRole="button" onPress={reload} style={styles.homePrimaryButton}><Text style={styles.homePrimaryButtonText}>重新同步赛程</Text></Pressable></View></Animated.View>}
     </ScrollView>
   );
+}
+
+function homeEntranceStyle(progress: Animated.Value, tilt = 1.2) {
+  return { opacity: progress, transform: [
+    { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [42, 0] }) },
+    { scale: progress.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) },
+    { rotate: progress.interpolate({ inputRange: [0, 1], outputRange: [`${tilt}deg`, '0deg'] }) },
+  ] };
 }
 
 function FavoritesPage({ favorites, onToggle, onOpenRace, onOpenDriver, onOpenTeam, onGoLibrary }: {
@@ -1400,6 +1483,7 @@ function FavoritesPage({ favorites, onToggle, onOpenRace, onOpenDriver, onOpenTe
   onOpenTeam: (id: string) => void;
   onGoLibrary: () => void;
 }) {
+  useThemeRevision();
   const { races, drivers, teams } = useSeason();
   const favoriteRaces = races.filter((race) => favorites.includes(raceFavoriteId(race.id)));
   const favoriteDrivers = drivers.filter((driver) => favorites.includes(driver.id));
@@ -1427,6 +1511,7 @@ function FavoritesPage({ favorites, onToggle, onOpenRace, onOpenDriver, onOpenTe
 }
 
 function StandingsPage({ tab, onTabChange, onOpenDriver, onOpenTeam }: { tab: StandingsTab; onTabChange: (tab: StandingsTab) => void; onOpenDriver: (id: string) => void; onOpenTeam: (id: string) => void }) {
+  useThemeRevision();
   const { drivers, teams } = useSeason();
   const rows = tab === 'drivers' ? drivers : teams;
   return (
@@ -1473,6 +1558,7 @@ function LibraryPage({ favorites, onToggle, tab, onTabChange, onOpenDriver, onOp
   onOpenTeam: (id: string) => void;
   onOpenTrack: (id: string) => void;
 }) {
+  useThemeRevision();
   const { races, drivers, teams } = useSeason();
   const { width: viewportWidth } = useWindowDimensions();
   const driverListWidth = Math.max(0, Math.min(viewportWidth - (viewportWidth >= 620 ? 70 : 0), 680) - 32);
@@ -1632,6 +1718,72 @@ function isLightTeamColor(color: string) {
   return (red * 299 + green * 587 + blue * 114) / 1000 >= 155;
 }
 
+function DriverPosterIdentity({ name, signature, compact }: { name: string; signature?: string; compact: boolean }) {
+  const reduceMotion = useContext(MotionPreferenceContext);
+  const [signatureWidth, setSignatureWidth] = useState(0);
+  const signatureProgress = useRef(new Animated.Value(0)).current;
+  const nameProgress = useRef(new Animated.Value(0)).current;
+  const signatureText = signature ? `${signature[0]!.toUpperCase()}${signature.slice(1)}\u00a0` : '';
+
+  useEffect(() => {
+    signatureProgress.stopAnimation();
+    nameProgress.stopAnimation();
+    if (reduceMotion) {
+      signatureProgress.setValue(1);
+      nameProgress.setValue(1);
+      return;
+    }
+    signatureProgress.setValue(0);
+    nameProgress.setValue(0);
+    // ponytail: reveal the existing font; real stroke order needs per-driver signature paths.
+    const animation = Animated.parallel([
+      Animated.timing(signatureProgress, { toValue: 1, duration: 1000, easing: Easing.linear, useNativeDriver: false }),
+      Animated.sequence([
+        Animated.delay(signature ? 360 : 0),
+        Animated.spring(nameProgress, { toValue: 1, damping: 12, stiffness: 220, mass: 0.7, useNativeDriver }),
+      ]),
+    ]);
+    animation.start();
+    return () => animation.stop();
+  }, [name, reduceMotion, signature, signatureProgress, nameProgress]);
+
+  const signatureStyle = [styles.driverPosterSignature, compact && styles.driverPosterSignatureCompact];
+  const nameOffset = nameProgress.interpolate({ inputRange: [0, 1], outputRange: [18, 0] });
+  const nameScale = nameProgress.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] });
+  return (
+    <View style={{ width: '100%', alignItems: 'center' }}>
+      {signature ? <View style={{ height: compact ? 54 : 70, alignItems: 'center', justifyContent: 'center' }}>
+        <Text
+          accessibilityElementsHidden
+          accessible={false}
+          importantForAccessibility="no"
+          onLayout={({ nativeEvent }) => setSignatureWidth(nativeEvent.layout.width)}
+          pointerEvents="none"
+          style={[signatureStyle, { opacity: 0 }]}
+        >{signatureText}</Text>
+        {signatureWidth > 0 ? <Animated.View
+          pointerEvents="none"
+          style={{
+            position: 'absolute', left: 0, top: 0, height: '100%', overflow: 'hidden',
+            transform: [{ rotate: '-7deg' }],
+            width: signatureProgress.interpolate({ inputRange: [0, 1], outputRange: [0, signatureWidth] }),
+          }}
+        >
+          <Text accessibilityLabel={`${name}的手写风格英文名`} style={[signatureStyle, { width: signatureWidth, flexShrink: 0 }]}>{signatureText}</Text>
+        </Animated.View> : null}
+      </View> : null}
+      <Animated.Text
+        style={[
+          styles.driverPosterName,
+          compact && styles.driverPosterNameCompact,
+          { opacity: nameProgress, transform: [{ translateY: nameOffset }, { scale: nameScale }] },
+        ]}
+        numberOfLines={2}
+      >{name}</Animated.Text>
+    </View>
+  );
+}
+
 function ProfileDetail({ detail, onBack, favorite, onToggle, onOpenDriver, onOpenTeam }: { detail: Detail; onBack: () => void; favorite: boolean; onToggle: (id: string) => void; onOpenDriver: (id: string) => void; onOpenTeam: (id: string) => void }) {
   const { races, drivers, teams } = useSeason();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
@@ -1703,8 +1855,7 @@ function ProfileDetail({ detail, onBack, favorite, onToggle, onOpenDriver, onOpe
             <Rect width="100" height="100" fill="url(#driver-portrait-fade)" />
           </Svg>
           <View style={[styles.driverPosterInfo, compact && styles.driverPosterInfoCompact]}>
-            {driverSignature ? <Text accessibilityLabel={`${driver.name}的手写风格英文名`} style={[styles.driverPosterSignature, compact && styles.driverPosterSignatureCompact]}>{driverSignature[0].toUpperCase() + driverSignature.slice(1)}</Text> : null}
-            <Text style={[styles.driverPosterName, compact && styles.driverPosterNameCompact]} numberOfLines={2}>{driver.name}</Text>
+            <DriverPosterIdentity key={driver.id} name={driver.name} signature={driverSignature} compact={compact} />
             <View style={[styles.driverPosterMeta, compact && styles.driverPosterMetaCompact]}>
               <View style={styles.driverPosterCountry}><DriverCountryFlag country={driver.country} /><Text style={[styles.driverPosterMetaText, compact && styles.driverPosterMetaTextCompact]}>{driver.country}</Text></View>
               <View style={styles.driverPosterDivider} />
@@ -1940,8 +2091,104 @@ function App() {
   return <SafeAreaProvider><SeasonContext.Provider value={value}><AppContent /></SeasonContext.Provider></SafeAreaProvider>;
 }
 
+function StartupIntro({ ready, onDone }: { ready: boolean; onDone: () => void }) {
+  const reduceMotion = useContext(MotionPreferenceContext);
+  const spin = useRef(new Animated.Value(0)).current;
+  const breakup = useRef(new Animated.Value(0)).current;
+  const overlayOpacity = useRef(new Animated.Value(1)).current;
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+
+  useEffect(() => {
+    if (!ready) return;
+    spin.setValue(0);
+    breakup.setValue(0);
+    overlayOpacity.setValue(1);
+    const timeline: Animated.CompositeAnimation[] = [];
+    if (!reduceMotion) {
+      timeline.push(Animated.timing(spin, { toValue: 1, duration: 720, easing: Easing.inOut(Easing.cubic), useNativeDriver }));
+      timeline.push(Animated.spring(breakup, { toValue: 1, stiffness: 105, damping: 15, mass: 0.8, useNativeDriver }));
+    }
+    timeline.push(Animated.delay(reduceMotion ? 0 : 80));
+    timeline.push(Animated.timing(overlayOpacity, { toValue: 0, duration: reduceMotion ? 140 : 210, easing: Easing.out(Easing.cubic), useNativeDriver }));
+    const animation = Animated.sequence(timeline);
+    animation.start(({ finished }) => { if (finished) onDoneRef.current(); });
+    return () => animation.stop();
+  }, [ready, reduceMotion, spin, breakup, overlayOpacity]);
+
+  const logoTransform = [
+    { rotate: spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) },
+  ];
+  const ringTransform = [
+    { translateX: breakup.interpolate({ inputRange: [0, 1], outputRange: [0, -72] }) },
+    { translateY: breakup.interpolate({ inputRange: [0, 1], outputRange: [0, -52] }) },
+    { rotate: breakup.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-112deg'] }) },
+    { scale: breakup.interpolate({ inputRange: [0, 1], outputRange: [1, 0.78] }) },
+  ];
+  const barTransform = [
+    { translateX: breakup.interpolate({ inputRange: [0, 1], outputRange: [0, 88] }) },
+    { translateY: breakup.interpolate({ inputRange: [0, 1], outputRange: [0, 56] }) },
+    { rotate: breakup.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '152deg'] }) },
+    { scale: breakup.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) },
+  ];
+  const segmentOpacity = breakup.interpolate({ inputRange: [0, 0.68, 1], outputRange: [1, 1, 0] });
+  return (
+    <Animated.View accessibilityViewIsModal accessibilityLabel="F1 Gridline" pointerEvents="auto" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 100, elevation: 100, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink, opacity: overlayOpacity }}>
+      <Animated.View style={{ width: 220, height: 220, transform: logoTransform }}>
+        <Animated.View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, opacity: segmentOpacity, transform: ringTransform }}>
+          <Svg width="100%" height="100%" viewBox="0 0 1024 1024"><Path d="M716 258C646 200 566 166 478 166 290 166 151 310 151 496c0 184 144 328 328 328 173 0 301-128 301-282V510" fill="none" stroke="#F5F6F7" strokeWidth={94} strokeLinecap="round" strokeLinejoin="round" /></Svg>
+        </Animated.View>
+        <Animated.View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, opacity: segmentOpacity, transform: barTransform }}>
+          <Svg width="100%" height="100%" viewBox="0 0 1024 1024"><Path d="M780 510H568" fill="none" stroke="#E31C3D" strokeWidth={94} strokeLinecap="round" /></Svg>
+        </Animated.View>
+      </Animated.View>
+    </Animated.View>
+  );
+}
+
+const CachedHomePage = memo(HomePage);
+const CachedSchedulePage = memo(SchedulePage);
+const CachedLiveTimingPage = memo(LiveTimingPage);
+const CachedFavoritesPage = memo(FavoritesPage);
+const CachedStandingsPage = memo(StandingsPage);
+const CachedLibraryPage = memo(LibraryPage);
+const CachedSettingsPage = memo(SettingsPage);
+
+function CachedSection({ active, ready, preloadDelay, children }: {
+  active: boolean;
+  ready: boolean;
+  preloadDelay: number;
+  children: ReactNode;
+}) {
+  const [mounted, setMounted] = useState(active);
+
+  useLayoutEffect(() => {
+    if (active && !mounted) setMounted(true);
+  }, [active, mounted]);
+
+  useEffect(() => {
+    if (!ready || mounted) return;
+    // ponytail: fixed 90ms staggering mounts all six secondary tabs within 540ms; tune from device profiling if the screen count grows.
+    const timer = setTimeout(() => setMounted(true), preloadDelay);
+    return () => clearTimeout(timer);
+  }, [ready, mounted, preloadDelay]);
+
+  if (!mounted) return null;
+  return (
+    <View
+      style={[styles.routeLayer, active ? styles.routeLayerActive : styles.routeLayerHidden]}
+      pointerEvents={active ? 'auto' : 'none'}
+      aria-hidden={!active}
+      accessibilityElementsHidden={!active}
+      importantForAccessibility={active ? 'auto' : 'no-hide-descendants'}
+    >
+      {children}
+    </View>
+  );
+}
+
 function AppContent() {
-  const { races } = useSeason();
+  const { races, status, hasSeasonData } = useSeason();
   const { width: viewportWidth } = useWindowDimensions();
   const systemColorScheme = useColorScheme();
   const [fontsLoaded] = useFonts({ F1Signature: require('./assets/fonts/Caveat[wght].ttf') });
@@ -1956,6 +2203,8 @@ function AppContent() {
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
   const [storageReady, setStorageReady] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
+  const [introComplete, setIntroComplete] = useState(false);
+  const finishIntro = useCallback(() => setIntroComplete(true), []);
   const isDarkTheme = themeMode === 'dark' || (themeMode === 'system' && systemColorScheme === 'dark');
   // ponytail: this app has one theme root; use context-bound styles if it grows to multiple roots.
   styles = isDarkTheme ? darkStyles : lightStyles;
@@ -2000,32 +2249,48 @@ function AppContent() {
     if (Platform.OS !== 'web') Appearance.setColorScheme(themeMode === 'system' ? 'unspecified' : themeMode);
   }, [themeMode]);
 
-  const toggleFavorite = (id: string) => setFavorites((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
-  const open = (next: Detail) => {
+  const toggleFavorite = useCallback((id: string) => setFavorites((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]), []);
+  const open = useCallback((next: Detail) => {
     if (detail) setDetailHistory((history) => [...history, detail]);
     setDetail(next);
-  };
-  const openDriver = (id: string) => open({ kind: 'driver', id });
-  const openTeam = (id: string) => open({ kind: 'team', id });
-  const goBack = () => {
+  }, [detail]);
+  const openRace = useCallback((race: Race) => open({ kind: 'race', id: race.id }), [open]);
+  const openRaceById = useCallback((id: string) => open({ kind: 'race', id }), [open]);
+  const openDriver = useCallback((id: string) => open({ kind: 'driver', id }), [open]);
+  const openTeam = useCallback((id: string) => open({ kind: 'team', id }), [open]);
+  const openTrack = useCallback((id: string) => open({ kind: 'track', id }), [open]);
+  const goBack = useCallback(() => {
     if (detailHistory.length > 0) {
       setDetail(detailHistory[detailHistory.length - 1]);
       setDetailHistory((history) => history.slice(0, -1));
     } else setDetail(null);
-  };
-  const goTo = (next: Section) => {
+  }, [detailHistory]);
+  const goTo = useCallback((next: Section) => {
     setSection(next);
     setDetail(null);
     setDetailHistory([]);
-  };
+  }, []);
+  const goToSchedule = useCallback(() => goTo('schedule'), [goTo]);
+  const goToLibrary = useCallback(() => goTo('library'), [goTo]);
 
-  if (!storageReady || !fontsLoaded) return <SafeAreaView style={styles.loading}><ActivityIndicator color={C.red} /><Text style={styles.loadingText}>正在载入赛季数据…</Text></SafeAreaView>;
+  const appReady = storageReady && fontsLoaded && (status !== 'loading' || hasSeasonData);
+  if (!appReady && !introComplete) return (
+    <MotionPreferenceContext.Provider value={reduceMotion}>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: C.ink }]}>
+        <StatusBar style="light" />
+        <View style={[styles.appRoot, { backgroundColor: C.ink }]}>
+          <StartupIntro ready={false} onDone={finishIntro} />
+        </View>
+      </SafeAreaView>
+    </MotionPreferenceContext.Provider>
+  );
 
   return (
+    <ThemeRevisionContext.Provider value={isDarkTheme}>
     <MotionPreferenceContext.Provider value={reduceMotion}>
-    <SafeAreaView style={[styles.safeArea, viewportWidth < 620 && styles.safeAreaMobile]}>
-      <StatusBar style={isDarkTheme ? 'light' : 'dark'} />
-      <View style={[styles.appRoot, viewportWidth < 620 && styles.appRootMobile]}>
+    <SafeAreaView style={[styles.safeArea, viewportWidth < 620 && styles.safeAreaMobile, !introComplete && { backgroundColor: C.ink }]}>
+      <StatusBar style={!introComplete || isDarkTheme ? 'light' : 'dark'} />
+      <View style={[styles.appRoot, viewportWidth < 620 && styles.appRootMobile, !introComplete && { backgroundColor: C.ink }]}>
         {!driverDetailOpen ? <View style={[styles.rail, viewportWidth < 620 && styles.bottomNav]}>
           {viewportWidth >= 620 ? <View style={styles.brandMark}><Text style={styles.brandF}>F</Text><View style={styles.brandSlash} /></View> : null}
           <View style={[styles.railNav, viewportWidth < 620 && styles.bottomNavItems]}>{navItems.map((item) => {
@@ -2036,25 +2301,19 @@ function AppContent() {
         </View> : null}
         <View style={[styles.mainPane, !detail && section === 'library' && libraryTab === 'teams' && viewportWidth >= 900 && { maxWidth: 1800 }, detail?.kind === 'team' && viewportWidth >= 900 && styles.teamDetailWidePane, driverDetailOpen && styles.driverFullScreenPane]}>
           <View style={styles.routeStack}>
-            {(['home', 'schedule', 'live', 'favorites', 'standings', 'library', 'settings'] as Section[]).map((page) => {
+            {navItems.map((item, index) => {
+              const page = item.id;
               const active = !detail && section === page;
-              const layerProps = {
-                style: [styles.routeLayer, active ? styles.routeLayerActive : styles.routeLayerHidden],
-                pointerEvents: active ? 'auto' as const : 'none' as const,
-                'aria-hidden': !active,
-                accessibilityElementsHidden: !active,
-                importantForAccessibility: active ? 'auto' as const : 'no-hide-descendants' as const,
-              };
               return (
-                <View key={page} {...layerProps}>
-                  {page === 'home' ? <HomePage active={active} onOpenRace={(race) => open({ kind: 'race', id: race.id })} onGoSchedule={() => goTo('schedule')} /> : null}
-                  {page === 'schedule' ? <SchedulePage filter={scheduleFilter} onFilterChange={setScheduleFilter} onOpenRace={(race) => open({ kind: 'race', id: race.id })} /> : null}
-                  {page === 'live' ? <LiveTimingPage /> : null}
-                  {page === 'favorites' ? <FavoritesPage favorites={favorites} onToggle={toggleFavorite} onOpenRace={(id) => open({ kind: 'race', id })} onOpenDriver={openDriver} onOpenTeam={openTeam} onGoLibrary={() => goTo('library')} /> : null}
-                  {page === 'standings' ? <StandingsPage tab={standingsTab} onTabChange={setStandingsTab} onOpenDriver={openDriver} onOpenTeam={openTeam} /> : null}
-                  {page === 'library' ? <LibraryPage favorites={favorites} onToggle={toggleFavorite} tab={libraryTab} onTabChange={setLibraryTab} onOpenDriver={openDriver} onOpenTeam={openTeam} onOpenTrack={(id) => open({ kind: 'track', id })} /> : null}
-                  {page === 'settings' ? <SettingsPage themeMode={themeMode} onThemeModeChange={setThemeMode} /> : null}
-                </View>
+                <CachedSection key={page} active={active} ready={appReady} preloadDelay={index * 90}>
+                  {page === 'home' ? <CachedHomePage active={active} introComplete={introComplete} onOpenRace={openRace} onGoSchedule={goToSchedule} /> : null}
+                  {page === 'schedule' ? <CachedSchedulePage filter={scheduleFilter} onFilterChange={setScheduleFilter} onOpenRace={openRace} /> : null}
+                  {page === 'live' ? <CachedLiveTimingPage /> : null}
+                  {page === 'favorites' ? <CachedFavoritesPage favorites={favorites} onToggle={toggleFavorite} onOpenRace={openRaceById} onOpenDriver={openDriver} onOpenTeam={openTeam} onGoLibrary={goToLibrary} /> : null}
+                  {page === 'standings' ? <CachedStandingsPage tab={standingsTab} onTabChange={setStandingsTab} onOpenDriver={openDriver} onOpenTeam={openTeam} /> : null}
+                  {page === 'library' ? <CachedLibraryPage favorites={favorites} onToggle={toggleFavorite} tab={libraryTab} onTabChange={setLibraryTab} onOpenDriver={openDriver} onOpenTeam={openTeam} onOpenTrack={openTrack} /> : null}
+                  {page === 'settings' ? <CachedSettingsPage themeMode={themeMode} onThemeModeChange={setThemeMode} /> : null}
+                </CachedSection>
               );
             })}
             {detail ? [...detailHistory, detail].map((screen, index, stack) => {
@@ -2067,9 +2326,11 @@ function AppContent() {
             }) : null}
           </View>
         </View>
+        {!introComplete ? <StartupIntro ready onDone={finishIntro} /> : null}
       </View>
     </SafeAreaView>
     </MotionPreferenceContext.Provider>
+    </ThemeRevisionContext.Provider>
   );
 }
 
@@ -2097,8 +2358,6 @@ function darkThemeColor(value: string, styleName: string, property: string) {
 const lightStyles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: C.canvas },
   safeAreaMobile: { backgroundColor: C.white },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.white, gap: 12 },
-  loadingText: { color: C.muted, fontSize: 13 },
   appRoot: { flex: 1, flexDirection: 'row', backgroundColor: C.canvas },
   appRootMobile: { flexDirection: 'column-reverse' },
   routeStack: { flex: 1 },
@@ -2483,7 +2742,7 @@ const lightStyles = StyleSheet.create({
   driverPortraitStandardCompact: { top: '16%', width: '70%', maxWidth: 340, aspectRatio: 440 / 1265, alignSelf: 'center' },
   driverPosterInfo: { position: 'absolute', left: 12, right: 12, bottom: 25, alignItems: 'center', zIndex: 1 },
   driverPosterInfoCompact: { bottom: 24 },
-  driverPosterSignature: { color: C.white, fontFamily: 'F1Signature', fontSize: 62, lineHeight: 70, transform: [{ rotate: '-7deg' }], textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 5 },
+  driverPosterSignature: { color: C.white, fontFamily: 'F1Signature', fontSize: 62, lineHeight: 70, textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 5 },
   driverPosterSignatureCompact: { fontSize: 44, lineHeight: 54 },
   driverPosterName: { maxWidth: '94%', color: C.white, fontSize: 37, lineHeight: 46, fontWeight: '900', textAlign: 'center', marginTop: -3, textShadowColor: 'rgba(0,0,0,0.36)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
   driverPosterNameCompact: { fontSize: 26, lineHeight: 34 },

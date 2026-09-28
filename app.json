@@ -2,26 +2,37 @@
   "expo": {
     "name": "F1 Gridline",
     "slug": "f1-season-guide",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "platforms": [
       "android",
       "web"
     ],
-    "icon": "./assets/icon.png",
+    "icon": "./assets/gridline-icon.png",
+    "splash": {
+      "image": "./assets/gridline-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#171A1F"
+    },
     "userInterfaceStyle": "automatic",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/c62c00a9-eec6-427b-b04a-f248404eca66"
+    },
     "android": {
       "package": "com.contr0l0.f1gridline",
+      "versionCode": 2,
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#171A1F",
+        "foregroundImage": "./assets/gridline-android-foreground.png",
+        "monochromeImage": "./assets/gridline-android-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/gridline-favicon.png"
     },
     "extra": {
       "eas": {
