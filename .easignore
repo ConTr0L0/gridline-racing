@@ -1,6 +1,5 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
-
-# dependencies
+# Keep EAS upload exclusions aligned with .gitignore.
+.git/
 node_modules/
 .venv/
 __pycache__/
@@ -32,10 +31,8 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
-
-# local recovery snapshots
+# Local env files and backups
+.env*
 *.bak
 
 # typescript
@@ -44,3 +41,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Local-only timing bridge; the Expo app does not import it.
+/live-service/

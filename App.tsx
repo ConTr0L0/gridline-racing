@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as WebBrowser from 'expo-web-browser';
+import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -8,16 +8,21 @@ import {
   AccessibilityInfo,
   Animated,
   Easing,
+  Image,
   Linking,
+  Appearance,
   Pressable as NativePressable,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
+  useColorScheme,
+  type ImageSourcePropType,
   type PressableProps,
 } from 'react-native';
-import Svg, { Circle, Path, Polygon, Rect } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient, Path, Pattern, Polygon, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import { SvgCss } from 'react-native-svg/css';
 import { circuitProfiles, driverProfiles, libraryStatsAsOf, teamProfiles, type CircuitProfile, type DriverProfile, type TeamProfile } from './library-data';
 import { teamLogoXml } from './team-logos';
@@ -35,7 +40,8 @@ const C = {
 const MotionPreferenceContext = createContext(false);
 const useNativeDriver = Platform.OS !== 'web';
 
-type Section = 'schedule' | 'live' | 'favorites' | 'standings' | 'library';
+type Section = 'home' | 'schedule' | 'live' | 'favorites' | 'standings' | 'library' | 'settings';
+type ThemeMode = 'system' | 'light' | 'dark';
 type Detail =
   | { kind: 'race'; id: string }
   | { kind: 'driver'; id: string }
@@ -62,12 +68,13 @@ type Driver = {
   teamId: string;
   number: number;
   points: number | null;
+  headshotUrl?: string;
   wins?: number;
   seasonStatus?: 'current' | 'substitute';
 };
 
-type Session = { id?: string; name: string; day: string; at: string; offset?: string; ended?: boolean };
-type Result = { driverId: string; position: number; gridPosition?: number; gap: string; fastestLap?: boolean; status: 'finished' | 'dnf' | 'dns' | 'dsq'; points: number | null };
+type Session = { id?: string; name: string; day: string; at: string; endsAt?: string; offset?: string; ended?: boolean };
+type Result = { driverId: string; driverCode?: string; driverName?: string; teamId?: string; position: number; gridPosition?: number; gap: string; fastestLap?: boolean; status: 'finished' | 'dnf' | 'dns' | 'dsq'; points: number | null };
 type ResultsBySession = Record<string, Result[]>;
 type Race = {
   id: string;
@@ -221,6 +228,12 @@ function flagArt(code: string): ReactNode {
     case 'HU': return <><Rect width="36" height="8" fill="#CE2939" /><Rect y="8" width="36" height="8" fill="#fff" /><Rect y="16" width="36" height="8" fill="#477050" /></>;
     case 'NL': return <><Rect width="36" height="8" fill="#AE1C28" /><Rect y="8" width="36" height="8" fill="#fff" /><Rect y="16" width="36" height="8" fill="#21468B" /></>;
     case 'IT': return <><Rect width="12" height="24" fill="#009246" /><Rect x="12" width="12" height="24" fill="#fff" /><Rect x="24" width="12" height="24" fill="#CE2B37" /></>;
+    case 'FR': return <><Rect width="12" height="24" fill="#0055A4" /><Rect x="12" width="12" height="24" fill="#fff" /><Rect x="24" width="12" height="24" fill="#EF4135" /></>;
+    case 'DE': return <><Rect width="36" height="8" fill="#111" /><Rect y="8" width="36" height="8" fill="#D00" /><Rect y="16" width="36" height="8" fill="#FFCE00" /></>;
+    case 'TH': return <><Rect width="36" height="4" fill="#A51931" /><Rect y="4" width="36" height="4" fill="#F4F5F8" /><Rect y="8" width="36" height="8" fill="#2D2A4A" /><Rect y="16" width="36" height="4" fill="#F4F5F8" /><Rect y="20" width="36" height="4" fill="#A51931" /></>;
+    case 'FI': return <><Rect width="36" height="24" fill="#fff" /><Rect x="10" width="5" height="24" fill="#003580" /><Rect y="9.5" width="36" height="5" fill="#003580" /></>;
+    case 'AR': return <><Rect width="36" height="8" fill="#74ACDF" /><Rect y="8" width="36" height="8" fill="#fff" /><Rect y="16" width="36" height="8" fill="#74ACDF" /><Circle cx="18" cy="12" r="3" fill="#F6B40E" /></>;
+    case 'NZ': return <><Rect width="36" height="24" fill="#00247D" /><Path d="M0 0 14 10M14 0 0 10" stroke="#fff" strokeWidth="2.8" /><Path d="M0 0 14 10M14 0 0 10" stroke="#C8102E" strokeWidth="1.2" /><Path d="M7 0v10M0 5h14" stroke="#fff" strokeWidth="3.5" /><Path d="M7 0v10M0 5h14" stroke="#C8102E" strokeWidth="1.7" />{[[22,5],[29,9],[23,16],[32,18]].map(([x,y],i)=><Polygon key={i} points={flagStarPoints(x,y,2.1)} fill="#CC142B" stroke="#fff" strokeWidth=".7" />)}</>;
     case 'AZ': return <><Rect width="36" height="8" fill="#00B5E2" /><Rect y="8" width="36" height="8" fill="#EF3340" /><Rect y="16" width="36" height="8" fill="#509E2F" /><Circle cx="17" cy="12" r="3.1" fill="#fff" /><Circle cx="18.4" cy="11" r="2.7" fill="#EF3340" /><Polygon points={flagStarPoints(23.3, 12, 2.5, 8)} fill="#fff" /></>;
     case 'BH': return <><Rect width="36" height="24" fill="#CE1126" /><Polygon points="0,0 12,0 9.6,2.4 12,4.8 9.6,7.2 12,9.6 9.6,12 12,14.4 9.6,16.8 12,19.2 9.6,21.6 12,24 0,24" fill="#fff" /></>;
     case 'QA': return <><Rect width="36" height="24" fill="#8A1538" /><Polygon points="0,0 14,0 11.7,1.33 14,2.67 11.7,4 14,5.33 11.7,6.67 14,8 11.7,9.33 14,10.67 11.7,12 14,13.33 11.7,14.67 14,16 11.7,17.33 14,18.67 11.7,20 14,21.33 11.7,22.67 14,24 0,24" fill="#fff" /></>;
@@ -266,9 +279,13 @@ const circuitSlugs: Record<string, string> = {
   '巴林国际赛道': 'bahrain', 'Bahrain International Circuit': 'bahrain', '吉达滨海赛道': 'jeddah', 'Jeddah Corniche Circuit': 'jeddah',
 };
 const circuitFacts: Record<string, CircuitProfile> = Object.fromEntries(circuitProfiles.map((profile) => [profile.id, profile]));
-const circuitImageUrl = (race: Race) => {
+const circuitImageSlugs: Record<string, string> = {
+  gillesvilleneuve: 'montreal', monaco: 'montecarlo', barcelonacatalunya: 'catalunya', redbullring: 'spielberg',
+};
+const circuitImageUrl = (race: Race, detailed = true) => {
   const slug = circuitSlugs[race.venue];
-  return slug ? `https://media.formula1.com/image/upload/c_fit%2Ch_704/q_auto/v1740000001/common/f1/2026/track/2026track${slug}detailed.webp` : null;
+  const imageSlug = slug ? circuitImageSlugs[slug] ?? slug : null;
+  return imageSlug ? `https://media.formula1.com/image/upload/c_fit%2Ch_704/q_auto/v1740000001/common/f1/2026/track/2026track${imageSlug}${detailed ? 'detailed' : ''}.webp` : null;
 };
 const circuitSlug = (race: Race) => circuitSlugs[race.venue];
 
@@ -299,6 +316,7 @@ type OpenF1Driver = {
   country_code: string;
   team_name: string;
   team_colour: string;
+  headshot_url?: string | null;
 };
 type OpenF1Standing = { driver_number?: number; team_name?: string; points_current: number; position_current: number };
 type OpenF1SessionResult = {
@@ -315,6 +333,7 @@ type SeasonCache = { version: 1 | 2; savedAt: string; data: SeasonData; resultsB
 type SeasonContextValue = SeasonData & {
   resultsBySession: ResultsBySession;
   status: 'loading' | 'live' | 'offline' | 'restricted';
+  errorHint: string | null;
   dataSource: 'openf1' | 'cache' | 'calendar';
   syncedAt: string | null;
   hasSeasonData: boolean;
@@ -393,7 +412,37 @@ const driverNames: Record<string, string> = {
   COL: '佛朗哥·科拉平托', PER: '塞尔吉奥·佩雷斯', BOT: '瓦尔特里·博塔斯',
 };
 const knownDriverIds: Record<string, string> = { NOR: 'norris', VER: 'verstappen', LEC: 'leclerc', HAM: 'hamilton', RUS: 'russell', PIA: 'piastri', ALB: 'albon', HAD: 'driver-6' };
-const offlineLibraryDrivers: Driver[] = driverProfiles.map((profile) => ({
+const f1PortraitBase = 'https://media.formula1.com/image/upload/c_lfill,w_440/q_auto/d_common:f1:2026:fallback:driver:2026fallbackdriverright.webp/v1740000001';
+const f1PortraitPaths: Record<string, string> = {
+  RUS: '/common/f1/2026/mercedes/georus01/2026mercedesgeorus01right.webp',
+  ANT: '/common/f1/2026/mercedes/andant01/2026mercedesandant01right.webp',
+  LEC: '/common/f1/2026/ferrari/chalec01/2026ferrarichalec01right.webp',
+  HAM: '/common/f1/2026/ferrari/lewham01/2026ferrarilewham01right.webp',
+  NOR: '/common/f1/2026/mclaren/lannor01/2026mclarenlannor01right.webp',
+  PIA: '/common/f1/2026/mclaren/oscpia01/2026mclarenoscpia01right.webp',
+  VER: '/common/f1/2026/redbullracing/maxver01/2026redbullracingmaxver01right.webp',
+  HAD: '/common/f1/2026/redbullracing/isahad01/2026redbullracingisahad01right.webp',
+  LAW: '/common/f1/2026/racingbulls/lialaw01/2026racingbullslialaw01right.webp',
+  LIN: '/common/f1/2026/racingbulls/arvlin01/2026racingbullsarvlin01right.webp',
+  GAS: '/common/f1/2026/alpine/piegas01/2026alpinepiegas01right.webp',
+  COL: '/common/f1/2026/alpine/fracol01/2026alpinefracol01right.webp',
+  OCO: '/common/f1/2026/haasf1team/estoco01/2026haasf1teamestoco01right.webp',
+  BEA: '/common/f1/2026/haasf1team/olibea01/2026haasf1teamolibea01right.webp',
+  HUL: '/common/f1/2026/audi/nichul01/2026audinichul01right.webp',
+  BOR: '/common/f1/2026/audi/gabbor01/2026audigabbor01right.webp',
+  SAI: '/common/f1/2026/williams/carsai01/2026williamscarsai01right.webp',
+  ALB: '/common/f1/2026/williams/alealb01/2026williamsalealb01right.webp',
+  ALO: '/common/f1/2026/astonmartin/feralo01/2026astonmartinferalo01right.webp',
+  STR: '/common/f1/2026/astonmartin/lanstr01/2026astonmartinlanstr01right.webp',
+  PER: '/common/f1/2026/cadillac/serper01/2026cadillacserper01right.webp',
+  BOT: '/common/f1/2026/cadillac/valbot01/2026cadillacvalbot01right.webp',
+};
+const f1Portrait = (code: string) => {
+  const path = f1PortraitPaths[code];
+  return path?.startsWith('https://') ? path : path ? `${f1PortraitBase}${path}` : undefined;
+};
+const activeDriverProfiles = driverProfiles.filter((profile) => profile.code !== 'TSU');
+const offlineLibraryDrivers: Driver[] = activeDriverProfiles.map((profile) => ({
   id: knownDriverIds[profile.code] ?? `driver-${profile.number}`,
   name: profile.name,
   code: profile.code,
@@ -401,13 +450,14 @@ const offlineLibraryDrivers: Driver[] = driverProfiles.map((profile) => ({
   teamId: profile.teamId,
   number: profile.number,
   points: profile.points,
+  headshotUrl: f1Portrait(profile.code),
   wins: profile.season.wins,
   seasonStatus: profile.seasonStatus,
 }));
 const offlineLibraryTeams: Team[] = teamProfiles.map(({ id, name, short, color, points, base }) => ({ id, name, short, color, points, base }));
 
 function withKnown2026Drivers(data: SeasonData): SeasonData {
-  const drivers: Driver[] = driverProfiles.map((profile) => {
+  const drivers: Driver[] = activeDriverProfiles.map((profile) => {
     const current = data.drivers.find((driver) => driver.code === profile.code || Number(driver.number) === profile.number);
     return {
       ...current,
@@ -418,6 +468,7 @@ function withKnown2026Drivers(data: SeasonData): SeasonData {
       teamId: profile.teamId,
       number: profile.number,
       points: current?.points ?? profile.points,
+      headshotUrl: f1Portrait(profile.code) ?? current?.headshotUrl,
       wins: profile.season.wins,
       seasonStatus: profile.seasonStatus,
     } satisfies Driver;
@@ -442,7 +493,7 @@ function withKnown2026Drivers(data: SeasonData): SeasonData {
 const teamNames: Record<string, string> = {
   McLaren: '迈凯伦', Ferrari: '法拉利', 'Red Bull Racing': '红牛', Mercedes: '梅赛德斯',
   'Aston Martin': '阿斯顿·马丁', Williams: '威廉姆斯', Alpine: '阿尔派', Haas: '哈斯',
-  'RB': 'RB', 'Racing Bulls': 'RB车队', 'Haas F1 Team': '哈斯', 'Kick Sauber': '索伯', Audi: '奥迪', Cadillac: '凯迪拉克',
+  'RB': 'RB车队', 'Racing Bulls': 'RB车队', 'Haas F1 Team': '哈斯', 'Kick Sauber': '索伯', Audi: '奥迪', Cadillac: '凯迪拉克',
 };
 const countryNames: Record<string, string> = {
   Australia: '澳大利亚', China: '中国', Japan: '日本', Bahrain: '巴林', 'Saudi Arabia': '沙特阿拉伯',
@@ -456,6 +507,11 @@ const driverCountryNames: Record<string, string> = {
   FRA: '法国', JPN: '日本', CAN: '加拿大', ITA: '意大利', GER: '德国', FIN: '芬兰',
   MEX: '墨西哥', ARG: '阿根廷', BRA: '巴西', USA: '美国', CHN: '中国', NZL: '新西兰',
 };
+const driverCountryFlags: Record<string, string> = {
+  英国: 'GB', 荷兰: 'NL', 摩纳哥: 'MC', 澳大利亚: 'AU', 泰国: 'TH', 西班牙: 'ES',
+  法国: 'FR', 日本: 'JP', 加拿大: 'CA', 意大利: 'IT', 德国: 'DE', 芬兰: 'FI',
+  墨西哥: 'MX', 阿根廷: 'AR', 巴西: 'BR', 美国: 'US', 中国: 'CN', 新西兰: 'NZ',
+};
 
 const OPENF1_TIMEOUT_MS = 10_000;
 
@@ -467,10 +523,25 @@ const openF1 = async <T,>(endpoint: string, params: Record<string, string>) => {
     const response = await fetch(`https://api.openf1.org/v1/${endpoint}?${query}`, { signal: controller.signal });
     if (!response.ok) throw new Error(`OpenF1 ${endpoint}: ${response.status} ${await response.text()}`);
     return await response.json() as T;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw new Error(`OpenF1 ${endpoint}: timeout`);
+    if (error instanceof Error && /Network request failed|Failed to fetch|fetch failed/i.test(error.message)) throw new Error(`OpenF1 ${endpoint}: network`);
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
 };
+
+function describeOpenF1Error(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  const endpoint = message.match(/^OpenF1 ([^:]+):/)?.[1];
+  const statusCode = message.match(/:\s*(\d{3})\b/)?.[1];
+  const reason = /timeout/i.test(message) ? '请求超时'
+    : /network/i.test(message) ? '网络请求失败'
+      : statusCode ? `接口返回 HTTP ${statusCode}`
+        : '接口响应异常';
+  return `${endpoint ? `${endpoint} · ` : ''}${reason}`;
+}
 
 const offsetMinutes = (offset = '+00:00') => {
   const match = /^([+-])(\d{2}):(\d{2})/.exec(offset);
@@ -490,7 +561,13 @@ const dateRange = (sessions: OpenF1Session[], offset: string) => {
   return `${format(first)} — ${format(last)}`;
 };
 
-const teamId = (name: string) => ({ 'Red Bull Racing': 'redbull', 'Aston Martin': 'aston', 'Kick Sauber': 'sauber' } as Record<string, string>)[name] ?? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+const teamId = (name: string) => ({
+  'Oracle Red Bull Racing': 'redbull', 'Red Bull Racing': 'redbull',
+  'Aston Martin': 'aston', 'Kick Sauber': 'sauber',
+  RB: 'racing-bulls', 'Racing Bulls': 'racing-bulls',
+  'Visa Cash App RB': 'racing-bulls', AlphaTauri: 'racing-bulls', 'Scuderia AlphaTauri': 'racing-bulls',
+  'Visa Cash App Racing Bulls Formula One Team': 'racing-bulls',
+} as Record<string, string>)[name] ?? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 async function loadOpenF1Season(): Promise<SeasonData> {
   const [meetings, sessions] = await Promise.all([
@@ -515,7 +592,7 @@ async function loadOpenF1Season(): Promise<SeasonData> {
         timeZone: 'UTC',
         dates: dateRange(eventSessions, offset),
         finished,
-        sessions: eventSessions.map((session) => ({ id: String(session.session_key), name: sessionLabels[session.session_name] ?? session.session_name, day: dayLabel(session.date_start, offset), at: session.date_start, offset: session.gmt_offset || offset, ended: Date.parse(session.date_end) < Date.now() })),
+        sessions: eventSessions.map((session) => ({ id: String(session.session_key), name: sessionLabels[session.session_name] ?? session.session_name, day: dayLabel(session.date_start, offset), at: session.date_start, endsAt: session.date_end, offset: session.gmt_offset || offset, ended: Date.parse(session.date_end) < Date.now() })),
         results: [],
       };
     })
@@ -546,7 +623,7 @@ async function loadOpenF1Season(): Promise<SeasonData> {
     id: knownDriverIds[driver.name_acronym] ?? `driver-${driver.driver_number}`,
     name: driverNames[driver.name_acronym] ?? driver.full_name, code: driver.name_acronym,
     country: driverCountryNames[driver.country_code] ?? driver.country_code, teamId: teamId(driver.team_name), number: driver.driver_number,
-    points: driverPoints.get(driver.driver_number) ?? null,
+    points: driverPoints.get(driver.driver_number) ?? null, headshotUrl: driver.headshot_url ?? undefined,
   })).sort((a, b) => (b.points ?? -1) - (a.points ?? -1));
   return { races, drivers: driverList, teams: teamList };
 }
@@ -570,11 +647,15 @@ function formatOpenF1Gap(value: OpenF1SessionResult['gap_to_leader'], leaderLabe
 
 async function loadOpenF1Results(sessionKey: string, driverList: Driver[], sessionName: string): Promise<Result[]> {
   const rows = await openF1<OpenF1SessionResult[]>('session_result', { session_key: sessionKey });
+  const eventDrivers = rows.some((row) => row.driver_number === 22 || row.driver_number === 30)
+    ? await openF1<OpenF1Driver[]>('drivers', { session_key: sessionKey }).catch(() => [])
+    : [];
   const isQualifying = sessionName.includes('排位');
   const poleRow = rows.find((row) => Number(row.position) === 1);
   const poleTime = isQualifying ? lastFiniteNumber(poleRow?.duration) : null;
   return rows.map((row): Result => {
     const driver = driverList.find((item) => Number(item.number) === Number(row.driver_number));
+    const eventDriver = eventDrivers.find((item) => Number(item.driver_number) === Number(row.driver_number));
     const status: Result['status'] = row.dsq ? 'dsq' : row.dns ? 'dns' : row.dnf ? 'dnf' : 'finished';
     const position = Number(row.position);
     const lapTime = isQualifying ? lastFiniteNumber(row.duration) : null;
@@ -585,6 +666,9 @@ async function loadOpenF1Results(sessionKey: string, driverList: Driver[], sessi
       : formatOpenF1Gap(row.gap_to_leader, sessionName === '正赛' ? '冠军' : '最快');
     return {
       driverId: driver?.id ?? `driver-${row.driver_number}`, position: Number.isFinite(position) && position > 0 ? position : 99,
+      driverCode: eventDriver?.name_acronym ?? driver?.code,
+      driverName: driverNames[eventDriver?.name_acronym ?? ''] ?? eventDriver?.full_name ?? driver?.name,
+      teamId: eventDriver ? teamId(eventDriver.team_name) : undefined,
       gap, status, points: null,
     };
   }).sort((a, b) => a.position - b.position);
@@ -602,12 +686,17 @@ async function readOpenF1ResultsCache(sessionKey: string): Promise<Result[] | nu
   }
 }
 
+const needsEventTeamRefresh = (rows?: Result[]) => Boolean(rows?.some((result) =>
+  (result.driverId === 'driver-30' || result.driverId === 'driver-22' || result.driverCode === 'LAW' || result.driverCode === 'TSU') && !result.teamId));
+
 const navItems: { id: Section; label: string; icon: string }[] = [
+  { id: 'home', label: '首页', icon: 'M3 10.5 12 3l9 7.5M5.5 9v11h13V9M9 20v-6h6v6' },
   { id: 'schedule', label: '赛程', icon: 'M4 6h16M7 3v6m10-6v6M4 10h16v10H4z' },
   { id: 'live', label: '实时', icon: 'M3 12h4l2.2-6 4.2 12 2.2-6H21' },
   { id: 'favorites', label: '收藏', icon: 'm12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z' },
   { id: 'standings', label: '排行榜', icon: 'M5 6h14M5 12h14M5 18h14M2.5 6h.1M2.5 12h.1M2.5 18h.1' },
   { id: 'library', label: '资料库', icon: 'M4 4h16v16H4zM8 8h8M8 12h8M8 16h5' },
+  { id: 'settings', label: '设置', icon: 'M12 3v2m0 14v2m9-9h-2M5 12H3m15.4-6.4-1.4 1.4M7 17l-1.4 1.4m12.8 0L17 17M7 7 5.6 5.6M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z' },
 ];
 
 function TeamFor(id: string, teamList: Team[]) {
@@ -646,18 +735,19 @@ function Pressable({ style, onPressIn, onPressOut, disabled, ...props }: Pressab
       scale.setValue(1);
       return;
     }
-    Animated.timing(scale, { toValue, duration: toValue < 1 ? 90 : 120, easing: Easing.out(Easing.cubic), useNativeDriver }).start();
+    Animated.spring(scale, { toValue, damping: 22, stiffness: 420, mass: 0.7, useNativeDriver }).start();
   };
   const base = typeof style === 'function' ? style({ pressed }) : style;
   const flattened = StyleSheet.flatten(base);
   const transform = flattened?.transform;
+  const pressOffset = scale.interpolate({ inputRange: [0.98, 1], outputRange: [1, 0], extrapolate: 'clamp' });
   return (
     <AnimatedPressable
       {...props}
       disabled={disabled}
       onPressIn={(event) => { setPressed(true); animateScale(0.98); onPressIn?.(event); }}
       onPressOut={(event) => { setPressed(false); animateScale(1); onPressOut?.(event); }}
-      style={{ ...flattened, transform: [...(Array.isArray(transform) ? transform : []), { scale }] }}
+      style={{ ...flattened, transform: [...(Array.isArray(transform) ? transform : []), { translateY: pressOffset }, { scale }] }}
     />
   );
 }
@@ -671,21 +761,19 @@ function MotionPanel({ motionKey, children }: { motionKey: string; children: Rea
     previousKey.current = motionKey;
     progress.stopAnimation();
     progress.setValue(reduceMotion ? 0.62 : 0.45);
-    const animation = Animated.timing(progress, { toValue: 1, duration: reduceMotion ? 180 : 230, easing: Easing.out(Easing.cubic), useNativeDriver });
+    const animation = Animated.timing(progress, { toValue: 1, duration: reduceMotion ? 140 : 220, easing: Easing.out(Easing.cubic), useNativeDriver });
     animation.start();
     return () => animation.stop();
   }, [motionKey, progress, reduceMotion]);
-  return <Animated.View style={{ opacity: progress }}>{children}</Animated.View>;
+  const panelOffset = progress.interpolate({ inputRange: [0.45, 1], outputRange: [6, 0], extrapolate: 'clamp' });
+  return <Animated.View style={{ opacity: progress, transform: reduceMotion ? [] : [{ translateY: panelOffset }] }}>{children}</Animated.View>;
 }
 
 const F1_LIVE_TIMING_URL = 'https://www.formula1.com/en/timing/f1-live-lite?os=http';
 
 function LiveTimingPage() {
   const openOfficialPage = () => {
-    const openPage = Platform.OS === 'web'
-      ? Linking.openURL(F1_LIVE_TIMING_URL)
-      : WebBrowser.openBrowserAsync(F1_LIVE_TIMING_URL);
-    void openPage.catch((error) => console.warn('F1 official page could not be opened:', error));
+    void Linking.openURL(F1_LIVE_TIMING_URL).catch((error) => console.warn('F1 official page could not be opened:', error));
   };
 
   return (
@@ -827,19 +915,28 @@ function ScreenHeader({ eyebrow, title, right }: { eyebrow: string; title: strin
 }
 
 function DemoNotice() {
-  const { status, reload, syncedAt, hasSeasonData, dataSource } = useSeason();
+  const { status, reload, syncedAt, hasSeasonData, dataSource, errorHint } = useSeason();
   const synced = formatSyncTime(syncedAt);
   const lastDataLabel = hasSeasonData
     ? `显示${dataSource === 'cache' ? '缓存' : '上次同步'}${synced ? `于 ${synced}` : ''}的数据`
-    : '显示本地官方赛历快照（分场时间、积分需联网）';
+    : `显示本地赛历与积分快照（积分截至 ${libraryStatsAsOf}；分场时间需联网）`;
   const label = status === 'live'
     ? `OpenF1 · 已同步${synced ? ` ${synced}` : ''} · CC BY-NC-SA 4.0 · 非官方 · 点此刷新`
     : status === 'loading'
       ? `正在连接 OpenF1 · ${lastDataLabel}`
       : status === 'restricted'
-        ? `OpenF1 当前限制数据访问 · ${lastDataLabel} · 点此重试`
-        : `OpenF1 暂不可用 · ${lastDataLabel} · 点此重试`;
-  return <MotionPanel motionKey={status}><Pressable accessibilityRole="button" disabled={status === 'loading'} onPress={reload} style={styles.demoNotice}><View style={[styles.demoDot, status === 'live' && styles.liveDot]} /><Text style={styles.demoNoticeText}>{label}</Text></Pressable></MotionPanel>;
+        ? `OpenF1 当前限制数据访问 · ${errorHint ?? '请检查账号权限'} · ${lastDataLabel} · 点此重试`
+        : `OpenF1 暂不可用 · ${errorHint ?? '连接失败'} · ${lastDataLabel} · 点此重试`;
+  const shortLabel = status === 'live'
+    ? `已同步${synced ? ` ${synced.slice(-5)}` : ''}`
+    : status === 'loading' ? '同步中…' : status === 'restricted' ? '访问受限' : '暂不可用';
+  return <MotionPanel motionKey={status}><View style={styles.demoNotice}>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityHint={status === 'loading' ? undefined : status === 'live' ? '点按刷新数据' : '点按重试连接'} disabled={status === 'loading'} onPress={reload} style={styles.demoNoticeButton}>
+      <View style={[styles.demoDot, status === 'live' ? styles.liveDot : (status === 'offline' || status === 'restricted') && styles.errorDot]} />
+      <Text numberOfLines={1} style={styles.demoNoticeText}>{shortLabel}</Text>
+    </Pressable>
+    <Text numberOfLines={1} style={styles.demoNoticeCredit}>OpenF1 · CC BY-NC-SA 4.0</Text>
+  </View></MotionPanel>;
 }
 
 function Segment<T extends string>({
@@ -882,7 +979,7 @@ function Segment<T extends string>({
   );
 }
 
-function FavoriteButton({ active, onPress }: { active: boolean; onPress: () => void }) {
+function FavoriteButton({ active, onPress, color }: { active: boolean; onPress: () => void; color?: string }) {
   const reduceMotion = useContext(MotionPreferenceContext);
   const starScale = useRef(new Animated.Value(1)).current;
   const previousActive = useRef(active);
@@ -895,49 +992,108 @@ function FavoriteButton({ active, onPress }: { active: boolean; onPress: () => v
       return;
     }
     starScale.setValue(0.72);
-    const animation = Animated.timing(starScale, { toValue: 1, duration: 180, easing: Easing.out(Easing.cubic), useNativeDriver });
+    const animation = Animated.spring(starScale, { toValue: 1, damping: 15, stiffness: 360, mass: 0.55, useNativeDriver });
     animation.start();
     return () => animation.stop();
   }, [active, reduceMotion, starScale]);
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={active ? '取消收藏' : '收藏'} onPress={onPress} hitSlop={8} style={styles.favoriteButton}>
-      <Animated.Text style={[styles.favoriteGlyph, active && styles.favoriteGlyphActive, { transform: [{ scale: starScale }] }]}>{active ? '★' : '☆'}</Animated.Text>
+      <Animated.Text style={[styles.favoriteGlyph, color && { color }, active && styles.favoriteGlyphActive, { transform: [{ scale: starScale }] }]}>{active ? '★' : '☆'}</Animated.Text>
     </Pressable>
   );
 }
 
 const teamLogoAliases: Record<string, string> = {
   'aston-martin': 'aston',
+  'aston-martin-aramco-formula-one-team': 'aston',
   'audi-revolut-f1-team': 'audi',
+  'atlassian-williams-f1-team': 'williams',
+  'bwt-alpine-formula-one-team': 'alpine',
+  'cadillac-formula-1-team': 'cadillac',
   'haas': 'haas',
   'haas-f1-team': 'haas',
+  'mclaren-mastercard-f1-team': 'mclaren',
+  'mercedes-amg-petronas-formula-one-team': 'mercedes',
+  'oracle-red-bull-racing': 'redbull',
   'red-bull-racing': 'redbull',
   'rb': 'racing-bulls',
   'visa-cash-app-rb': 'racing-bulls',
+  'visa-cash-app-racing-bulls-formula-one-team': 'racing-bulls',
+  'scuderia-ferrari-hp': 'ferrari',
   'tgr-haas-f1-team': 'haas',
 };
 const teamLogoTiles: Record<string, string> = {
-  mercedes: '#171A1F',
-  alpine: '#142B55',
-  aston: '#00594F',
+  mercedes: C.white,
+  ferrari: '#E8002D',
+  mclaren: C.white,
+  redbull: '#3671C6',
+  'racing-bulls': C.white,
+  alpine: C.white,
+  haas: C.white,
+  audi: C.white,
+  williams: C.white,
+  aston: '#229971',
+  cadillac: C.white,
+};
+const teamLogoImages: Record<string, ImageSourcePropType> = {
+  mercedes: require('./assets/team-logos/f1-2026-color-mercedes.webp'),
+  ferrari: require('./assets/team-logos/f1-2026-color-ferrari.webp'),
+  mclaren: require('./assets/team-logos/f1-2026-color-mclaren.webp'),
+  redbull: require('./assets/team-logos/f1-2026-color-redbull.webp'),
+  'racing-bulls': require('./assets/team-logos/f1-2026-color-racing-bulls.webp'),
+  alpine: require('./assets/team-logos/f1-2026-color-alpine.webp'),
+  haas: require('./assets/team-logos/f1-2026-color-haas.webp'),
+  audi: require('./assets/team-logos/f1-2026-color-audi.webp'),
+  williams: require('./assets/team-logos/f1-2026-color-williams.webp'),
+  aston: require('./assets/team-logos/f1-2026-color-aston.webp'),
+  cadillac: require('./assets/team-logos/f1-2026-color-cadillac.webp'),
+};
+const teamCarImages: Record<string, ImageSourcePropType> = {
+  mercedes: require('./assets/team-cars/2026mercedescarright.webp'),
+  ferrari: require('./assets/team-cars/2026ferraricarright.webp'),
+  mclaren: require('./assets/team-cars/2026mclarencarright.webp'),
+  redbull: require('./assets/team-cars/2026redbullracingcarright.webp'),
+  'racing-bulls': require('./assets/team-cars/2026racingbullscarright.webp'),
+  alpine: require('./assets/team-cars/2026alpinecarright.webp'),
+  'haas-f1-team': require('./assets/team-cars/2026haasf1teamcarright.webp'),
+  audi: require('./assets/team-cars/2026audicarright.webp'),
+  williams: require('./assets/team-cars/2026williamscarright.webp'),
+  aston: require('./assets/team-cars/2026astonmartincarright.webp'),
+  cadillac: require('./assets/team-cars/2026cadillaccarright.webp'),
+};
+const teamLogoWhiteImages: Record<string, ImageSourcePropType> = {
+  mercedes: require('./assets/team-logos/f1-2026-mercedes.webp'),
+  ferrari: require('./assets/team-logos/f1-2026-ferrari.webp'),
+  mclaren: require('./assets/team-logos/f1-2026-mclaren.webp'),
+  redbull: require('./assets/team-logos/f1-2026-redbull.webp'),
+  'racing-bulls': require('./assets/team-logos/f1-2026-racing-bulls.webp'),
+  alpine: require('./assets/team-logos/f1-2026-alpine.webp'),
+  haas: require('./assets/team-logos/f1-2026-haas.webp'),
+  audi: require('./assets/team-logos/f1-2026-audi.webp'),
+  williams: require('./assets/team-logos/f1-2026-williams.webp'),
+  aston: require('./assets/team-logos/f1-2026-aston.webp'),
+  cadillac: require('./assets/team-logos/f1-2026-cadillac.webp'),
 };
 const teamLogoSizes = {
-  row: { width: 48, height: 36 },
-  standing: { width: 42, height: 31 },
-  timing: { width: 18, height: 18, padding: 0, borderWidth: 0, borderRadius: 0 },
-  result: { width: 18, height: 18, padding: 1, borderWidth: 0, borderRadius: 2 },
-  profile: { width: 104, height: 54 },
+  row: { width: 40, height: 40, borderRadius: 20 },
+  standing: { width: 36, height: 36, borderRadius: 18 },
+  timing: { width: 26, height: 26, padding: 0, borderWidth: 0, borderRadius: 13 },
+  result: { width: 26, height: 26, padding: 1, borderWidth: 0, borderRadius: 13 },
+  podium: { width: 28, height: 28, padding: 0, borderWidth: 0, borderRadius: 14 },
+  profile: { width: 56, height: 56, borderRadius: 28 },
+  card: { width: 48, height: 48, borderRadius: 24, padding: 8, borderWidth: 0 },
 };
 type TeamLogoSize = keyof typeof teamLogoSizes;
 
-function TeamLogo({ teamId, size = 'row' }: { teamId: string; size?: TeamLogoSize }) {
+function TeamLogo({ teamId, size = 'row', inverse = false, plain = false }: { teamId: string; size?: TeamLogoSize; inverse?: boolean; plain?: boolean }) {
   const logoId = teamLogoAliases[teamId] ?? teamId;
   const xml = teamLogoXml[logoId];
-  const compact = size === 'timing';
-  if (!xml) return null;
+  const image = inverse ? teamLogoWhiteImages[logoId] ?? teamLogoImages[logoId] : teamLogoImages[logoId];
+  const tile = teamLogoTiles[logoId] ?? C.white;
+  if (!image && !xml) return null;
   return (
-    <View style={[styles.teamLogoBadge, teamLogoSizes[size], { backgroundColor: teamLogoTiles[logoId] ?? (compact ? 'transparent' : C.white), borderColor: compact ? 'transparent' : teamLogoTiles[logoId] ?? C.line }]}>
-      <SvgCss xml={xml} width="100%" height="100%" preserveAspectRatio="xMidYMid meet" />
+    <View style={[styles.teamLogoBadge, teamLogoSizes[size], plain ? styles.teamLogoPlain : { backgroundColor: inverse ? 'rgba(0,0,0,0.24)' : tile, borderColor: inverse ? 'transparent' : tile === C.white ? C.line : tile }]}>
+      {image ? <Image source={image} style={styles.teamLogoImage} resizeMode="contain" /> : xml ? <SvgCss xml={xml} width="100%" height="100%" preserveAspectRatio="xMidYMid meet" /> : null}
     </View>
   );
 }
@@ -957,15 +1113,71 @@ function PersonRow({ driver, onPress, favorite, onFavorite }: { driver: Driver; 
   );
 }
 
+function DriverCountryFlag({ country }: { country: string }) {
+  const code = driverCountryFlags[country];
+  return code ? <View accessibilityLabel={`${country}国旗`} style={styles.driverCountryFlag}><Svg width="24" height="16" viewBox="0 0 36 24">{flagArt(code)}<Rect width="36" height="24" fill="none" stroke="#000" strokeOpacity=".08" /></Svg></View> : null;
+}
+
+function DriverListCard({ driver, onPress, column = false }: { driver: Driver; onPress: () => void; column?: boolean }) {
+  const { teams } = useSeason();
+  const compact = useWindowDimensions().width < 600;
+  const team = TeamFor(driver.teamId, teams);
+  const textColor = isLightTeamColor(team.color) ? C.ink : C.white;
+  return (
+    <View style={[styles.driverListItem, compact && styles.driverListItemCompact, { width: column ? '48%' : '100%' }]}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`${driver.name}车手详情`} onPress={onPress} style={[styles.driverListCard, { backgroundColor: team.color }]}>
+        <View pointerEvents="none" style={[styles.driverListNumberBack, compact && styles.driverListNumberBackCompact]}>
+          {String(driver.number).split('').map((digit, index) => <Text key={index} style={[styles.driverListNumberBackText, compact && styles.driverListNumberBackTextCompact, { color: textColor }]}>{digit}</Text>)}
+        </View>
+        <DriverPortrait driver={driver} variant="list" />
+        <View style={[styles.driverListCopy, compact && styles.driverListCopyCompact]}>
+          <Text style={[styles.driverListName, compact && styles.driverListNameCompact, { color: textColor }]} numberOfLines={2}>{driver.name}</Text>
+          <Text style={[styles.driverListTeam, { color: textColor }]} numberOfLines={1}>{team.name}{driver.seasonStatus === 'substitute' ? ' · 本季代班' : ''}</Text>
+          <Text style={[styles.driverListNumber, compact && styles.driverListNumberCompact, { color: textColor }]}>{driver.number}</Text>
+          <View style={styles.driverListFlag}><DriverCountryFlag country={driver.country} /></View>
+        </View>
+      </Pressable>
+    </View>
+  );
+}
+
 function TeamRow({ team, onPress, favorite, onFavorite }: { team: Team; onPress: () => void; favorite?: boolean; onFavorite?: () => void }) {
   return (
     <View style={styles.personRow}>
       <Pressable accessibilityRole="button" onPress={onPress} style={styles.rowMain}>
-        <TeamLogo teamId={team.id} size="timing" />
+        <TeamLogo teamId={team.id} size="row" />
         <View style={styles.rowCopy}><Text style={styles.rowTitle}>{team.name}</Text><Text style={styles.rowSub}>{team.short} · {team.base}</Text></View>
         <Text style={styles.teamPoints}>{team.points ?? '—'}{team.points !== null ? <Text style={styles.pointsUnit}> 分</Text> : null}</Text>
       </Pressable>
       {onFavorite ? <FavoriteButton active={Boolean(favorite)} onPress={onFavorite} /> : null}
+    </View>
+  );
+}
+
+function TeamCard({ team, drivers, compact, favorite, onFavorite, onPress }: { team: Team; drivers: Driver[]; compact: boolean; favorite: boolean; onFavorite: () => void; onPress: () => void }) {
+  const teamDrivers = drivers.filter((driver) => driver.teamId === team.id && driver.seasonStatus !== 'substitute').slice(0, 2);
+  const carImage = teamCarImages[team.id];
+  const textColor = isLightTeamColor(team.color) ? C.ink : C.white;
+  return (
+    <View style={[styles.teamCard, { width: compact ? '100%' : '48%', aspectRatio: compact ? 1.6 : 2.5, backgroundColor: team.color }]}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`${team.name}车队，${teamDrivers.map((driver) => driver.name).join('、')}，查看车队资料`} onPress={onPress} style={styles.teamCardMain}>
+        {carImage ? <Image accessibilityLabel={`${team.name} 2026赛车`} source={carImage} resizeMode="contain" style={styles.teamCardCar} /> : teamDrivers.map((driver, index) => <DriverPortrait key={driver.id} driver={driver} variant="team" index={index} />)}
+        <View style={styles.teamCardHeader}>
+          <View style={styles.teamCardTitleBlock}>
+            <Text style={[styles.teamCardName, { color: textColor }]} numberOfLines={1}>{team.name}</Text>
+            <Text style={[styles.teamCardCode, { color: textColor }]} numberOfLines={1}>{team.short}</Text>
+          </View>
+          <TeamLogo teamId={team.id} size="card" />
+        </View>
+        <View style={styles.teamCardDrivers}>
+          {teamDrivers.map((driver) => <Text key={driver.id} style={[styles.teamCardDriver, { color: textColor }]} numberOfLines={1}>{driver.name} <Text style={styles.teamCardDriverCode}>{driver.code}</Text></Text>)}
+        </View>
+      </Pressable>
+      <View style={styles.teamCardFooter}>
+        <Text style={[styles.teamCardBase, { color: textColor }]} numberOfLines={1}>{team.base}</Text>
+        <Text style={[styles.teamCardPoints, { color: textColor }]}>{team.points ?? '—'}<Text style={styles.teamCardPointsLabel}> PTS</Text></Text>
+        <FavoriteButton active={favorite} onPress={onFavorite} color={textColor} />
+      </View>
     </View>
   );
 }
@@ -1009,6 +1221,173 @@ function SchedulePage({ filter, onFilterChange, onOpenRace }: { filter: Schedule
         })}
         {visibleRaces.length > 0 ? <View style={styles.trackTeaser}><TrackMap key={visibleRaces[0]!.id} race={visibleRaces[0]!} compact /><Text style={styles.trackTeaserNote}>赛道图与分站同步</Text></View> : null}
       </MotionPanel>
+    </ScrollView>
+  );
+}
+
+function SettingsPage({ themeMode, onThemeModeChange }: { themeMode: ThemeMode; onThemeModeChange: (mode: ThemeMode) => void }) {
+  const themeDescription = themeMode === 'system'
+    ? '跟随设备外观，并在系统主题变化时自动切换。'
+    : themeMode === 'light' ? '日间模式已启用。' : '夜间模式已启用。';
+  return (
+    <ScrollView contentContainerStyle={styles.pageContent} showsVerticalScrollIndicator={false}>
+      <ScreenHeader eyebrow="F1 · 偏好设置" title="设置" />
+      <View style={styles.settingsCard}>
+        <View style={styles.settingsHeader}>
+          <View style={styles.settingsIcon}><Glyph path="M12 3v2m0 14v2m9-9h-2M5 12H3m15.4-6.4-1.4 1.4M7 17l-1.4 1.4m12.8 0L17 17M7 7 5.6 5.6M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z" color={C.red} size={20} /></View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.settingsTitle}>外观模式</Text>
+            <Text style={styles.settingsDescription}>选择应用的显示主题</Text>
+          </View>
+        </View>
+        <Segment items={[{ id: 'system', label: '跟随系统' }, { id: 'light', label: '日间模式' }, { id: 'dark', label: '夜间模式' }]} selected={themeMode} onSelect={onThemeModeChange} />
+        <Text style={styles.settingsHint}>{themeDescription}</Text>
+      </View>
+    </ScrollView>
+  );
+}
+
+function HomePage({ onOpenRace, onGoSchedule, active }: { onOpenRace: (race: Race) => void; onGoSchedule: () => void; active: boolean }) {
+  const { races, drivers, teams, resultsBySession, status, loadSessionResults, reload } = useSeason();
+  const [now, setNow] = useState(Date.now());
+  const [refreshingResults, setRefreshingResults] = useState(false);
+
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+
+  const timedSessions = races.flatMap((race) => race.sessions.map((session) => ({
+    race,
+    session,
+    start: Date.parse(session.at),
+    end: Date.parse(session.endsAt ?? ''),
+  })));
+  const currentSession = timedSessions.find(({ start, end }) => start <= now && now < end);
+  const currentRace = currentSession?.race ?? races.find((race) => {
+    const firstStart = Date.parse(race.sessions[0]?.at ?? '');
+    const raceEnd = Date.parse(race.sessions.find((session) => session.name === '正赛')?.endsAt ?? '');
+    return firstStart <= now && now < raceEnd;
+  });
+  const currentWeekendNextSession = currentRace?.sessions.find((session) => Date.parse(session.at) > now);
+  const latestFinishedRace = races.flatMap((race) => {
+    const session = race.sessions.find((item) => item.name === '正赛');
+    const end = Date.parse(session?.endsAt ?? '');
+    return session && end <= now && now - end < 24 * 60 * 60 * 1000 ? [{ race, session, end }] : [];
+  }).sort((a, b) => b.end - a.end)[0];
+  const nextRace = races.find((race) => race.id !== currentRace?.id && (
+    race.sessions.some((session) => Date.parse(session.at) > now) || (!race.sessions.length && !race.finished)
+  ));
+  const nextRaceSession = nextRace?.sessions.find((session) => Date.parse(session.at) > now) ?? nextRace?.sessions[0];
+  const featuredRace = currentRace ?? latestFinishedRace?.race ?? nextRace;
+  const featuredSession = currentRace ? currentSession?.session ?? currentWeekendNextSession : latestFinishedRace?.session ?? nextRaceSession;
+  const recentResultKey = latestFinishedRace?.session.id;
+  const recentResults = recentResultKey ? resultsBySession[recentResultKey] ?? [] : [];
+  const podiumResults = [2, 1, 3].map((position) => recentResults.find((result) => result.position === position));
+  const hasPodium = podiumResults.every((result) => result && drivers.some((driver) => driver.id === result.driverId && (driver.headshotUrl || f1Portrait(driver.code))));
+
+  useEffect(() => {
+    if (!active || !latestFinishedRace?.session.id || resultsBySession[latestFinishedRace.session.id]) return;
+    void loadSessionResults(latestFinishedRace.session.id, latestFinishedRace.session.name).catch(() => undefined);
+  }, [active, latestFinishedRace?.session.id, latestFinishedRace?.session.name, loadSessionResults, resultsBySession]);
+
+  const refreshRecentResults = async () => {
+    if (!recentResultKey || !latestFinishedRace) return;
+    setRefreshingResults(true);
+    try {
+      await loadSessionResults(recentResultKey, latestFinishedRace.session.name, true);
+    } catch {
+      // Keep the last known result state visible when refresh fails.
+    } finally {
+      setRefreshingResults(false);
+    }
+  };
+
+  const countdownStart = Date.parse((currentRace ? currentWeekendNextSession : nextRaceSession)?.at ?? '');
+  const countdownSeconds = Number.isFinite(countdownStart) ? Math.max(0, Math.floor((countdownStart - now) / 1000)) : 0;
+  const countdown = [Math.floor(countdownSeconds / 86400), Math.floor(countdownSeconds / 3600) % 24, Math.floor(countdownSeconds / 60) % 60, countdownSeconds % 60];
+  const heroImage = featuredRace ? circuitImageUrl(featuredRace) : undefined;
+  const showsPreviousResult = !currentRace && Boolean(latestFinishedRace && featuredRace?.id === latestFinishedRace.race.id);
+  const showsNextPreview = Boolean(nextRace && nextRace.id !== featuredRace?.id);
+
+  return (
+    <ScrollView style={styles.homePage} contentContainerStyle={styles.homeContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.homeHeader}>
+        <View><Text style={styles.homeEyebrow}>F1 · 2026 SEASON</Text><Text style={styles.homeTitle}>首页</Text></View>
+        <Pressable accessibilityRole="button" onPress={onGoSchedule} style={styles.homeScheduleLink}><Glyph path={navItems[1].icon} color={C.red} size={16} /><Text style={styles.homeScheduleLinkText}>赛事列表 ›</Text></Pressable>
+      </View>
+
+      {featuredRace ? <>
+        <View style={styles.homeHero}>
+          <View style={styles.homeHeroTop}>
+            <Text style={styles.homeHeroKicker}>第 {String(featuredRace.round).padStart(2, '0')} 站 · {currentRace ? currentSession ? '正在进行' : '赛事周末' : showsPreviousResult ? '上一站赛果' : '下一站'}</Text>
+            {currentRace ? <View style={styles.homeLiveBadge}><View style={styles.homeLiveDot} /><Text style={styles.homeLiveBadgeText}>{currentSession ? 'LIVE' : 'RACE WEEKEND'}</Text></View> : null}
+          </View>
+          <View style={styles.homeHeroBody}>
+            <View style={styles.homeHeroCopy}>
+              <Text style={styles.homeHeroTitle}>{featuredRace.name}</Text>
+              <View style={styles.homeHeroVenue}><CountryFlag race={featuredRace} /><View style={styles.homeHeroVenueCopy}><Text style={styles.homeHeroVenueName}>{featuredRace.venue}</Text><Text style={styles.homeHeroCountry}>{featuredRace.country}</Text></View></View>
+              <Text style={styles.homeHeroDate}>{featuredRace.dates || '赛程日期待同步'}</Text>
+            </View>
+            {heroImage ? <Image accessibilityLabel={`${featuredRace.venue}赛道轮廓`} source={{ uri: heroImage }} resizeMode="contain" style={styles.homeCircuitImage} /> : null}
+          </View>
+          <Pressable accessibilityRole="button" onPress={() => onOpenRace(featuredRace)} style={styles.homePrimaryButton}><Text style={styles.homePrimaryButtonText}>{showsPreviousResult ? '查看完整赛果' : '查看赛事详情'}</Text><Text style={styles.homePrimaryButtonArrow}>›</Text></Pressable>
+
+          {currentRace ? <View style={styles.homeCurrentSession}>
+            <Text style={styles.homeCurrentLabel}>{currentSession ? '当前场次' : '周末下一场'}</Text>
+            <Text style={styles.homeCurrentName}>{currentSession?.session.name ?? currentWeekendNextSession?.name ?? '赛程安排'}</Text>
+            {featuredSession ? <Text style={styles.homeCurrentTime}>{formatTime(featuredSession.at)}{featuredSession.endsAt ? ` — ${formatTime(featuredSession.endsAt)}` : ''} · 本地时间</Text> : null}
+            {currentSession ? <Pressable accessibilityRole="link" onPress={() => { void Linking.openURL(F1_LIVE_TIMING_URL).catch(() => undefined); }} style={styles.homeOfficialLink}><Text style={styles.homeOfficialLinkText}>打开 F1 官方实时计时 ↗</Text></Pressable> : null}
+          </View> : showsPreviousResult ? <View style={styles.homeResults}>
+            {hasPodium ? <View style={styles.homePodium}>{podiumResults.map((result) => {
+              if (!result) return null;
+              const driver = drivers.find((item) => item.id === result.driverId);
+              if (!driver) return null;
+              const team = result.teamId ? teams.find((item) => item.id === result.teamId)
+                : driver.code === 'LAW' || driver.code === 'TSU' ? undefined : TeamFor(driver.teamId, teams);
+              const portraitDriver = driver.headshotUrl ? driver : { ...driver, headshotUrl: f1Portrait(driver.code) };
+              const winner = result.position === 1;
+              return <View key={result.driverId} style={[styles.homePodiumCard, winner && styles.homePodiumCardWinner]}>
+                <Text style={[styles.homePodiumRank, winner && styles.homePodiumRankWinner]}>{String(result.position).padStart(2, '0')}</Text>
+                <View style={[styles.homePodiumPhoto, winner && styles.homePodiumPhotoWinner, { backgroundColor: team?.color ?? '#E7E7E7' }]}><DriverPortrait driver={portraitDriver} variant="podium" /></View>
+                <Text numberOfLines={1} style={styles.homePodiumName}>{driver.name}</Text>
+                {team ? <TeamLogo teamId={team.id} size="podium" plain /> : null}
+                <Text style={[styles.homePodiumPoints, winner && styles.homePodiumPointsWinner]}>{result.points != null ? `${result.points}分` : result.gap}</Text>
+              </View>;
+            })}</View> : <View style={styles.homeResultEmpty}><Text style={styles.homeResultEmptyText}>{status === 'loading' ? '正在同步前三名与车手照片…' : '前三名赛果或车手照片暂未同步'}</Text>{status !== 'loading' ? <Pressable accessibilityRole="button" disabled={refreshingResults} onPress={() => void refreshRecentResults()}><Text style={styles.homeRetryText}>{refreshingResults ? '正在刷新…' : '重新获取赛果 ↻'}</Text></Pressable> : null}</View>}
+          </View> : featuredSession ? <View style={styles.homeCountdown}>
+            <Text style={styles.homeCurrentLabel}>{currentRace ? '距离下一场' : '距离首场练习'}</Text>
+            {countdown.map((value, index) => <View key={index} style={styles.homeCountdownCell}><Text style={styles.homeCountdownValue}>{String(value).padStart(2, '0')}</Text><Text style={styles.homeCountdownUnit}>{['天', '时', '分', '秒'][index]}</Text></View>)}
+          </View> : <Text style={styles.homeSchedulePending}>详细场次时间联网同步后显示</Text>}
+        </View>
+
+        <View style={styles.homeSectionHeading}><View><Text style={styles.homeSectionTitle}>赛事时间安排</Text><Text style={styles.homeSectionSubtitle}>{featuredRace.dates || '日期待同步'} · 手机本地时间</Text></View><Text style={styles.homeSectionMark}>◷</Text></View>
+        {featuredRace.sessions.length ? Array.from(new Set(featuredRace.sessions.map((session) => session.day))).map((day) => (
+          <View key={day} style={styles.homeDayGroup}>
+            <Text style={styles.homeDayTitle}>{day}</Text>
+            {featuredRace.sessions.filter((session) => session.day === day).map((session) => {
+              const isActive = currentSession?.session === session;
+              const isEnded = session.endsAt ? Date.parse(session.endsAt) <= now : Boolean(session.ended);
+              const dotColor = session.name.includes('冲刺') ? '#C34BF2' : session.name.includes('练') ? '#F0CB35' : '#24C77B';
+              return <View key={session.id ?? `${session.name}-${session.at}`} style={[styles.homeSessionRow, isActive && styles.homeSessionRowActive]}>
+                <View style={[styles.homeSessionDot, { backgroundColor: dotColor }]} />
+                <View style={styles.homeSessionCopy}><Text style={styles.homeSessionName}>{session.name}</Text>{isActive ? <Text style={styles.homeSessionStatus}>正在进行</Text> : isEnded ? <Text style={styles.homeSessionStatus}>已结束</Text> : null}</View>
+                <Text style={[styles.homeSessionTime, { color: dotColor }]}>{formatTime(session.at)}{session.endsAt ? ` — ${formatTime(session.endsAt)}` : ''}</Text>
+              </View>;
+            })}
+          </View>
+        )) : <View style={styles.homeSchedulePendingCard}><Text style={styles.homeSchedulePending}>赛历快照暂不包含分场时间</Text><Pressable accessibilityRole="button" onPress={reload}><Text style={styles.homeRetryText}>重新同步赛程 ↻</Text></Pressable></View>}
+
+        {showsNextPreview && nextRace ? <View style={styles.homeNextSection}>
+          <View style={styles.homeSectionHeading}><View><Text style={styles.homeSectionTitle}>下一站预告</Text><Text style={styles.homeSectionSubtitle}>NEXT GRAND PRIX</Text></View><Text style={styles.homeSectionMark}>↗</Text></View>
+          <Pressable accessibilityRole="button" onPress={() => onOpenRace(nextRace)} style={styles.homeNextCard}>
+            <CountryFlag race={nextRace} />
+            <View style={styles.homeNextCopy}><Text style={styles.homeNextTitle}>{nextRace.name}</Text><Text style={styles.homeNextVenue}>{nextRace.venue} · {nextRace.country}</Text><Text style={styles.homeNextDate}>{nextRace.dates}{nextRaceSession ? ` · ${formatTime(nextRaceSession.at)}` : ''}</Text></View>
+            <Text style={styles.homeNextArrow}>›</Text>
+          </Pressable>
+        </View> : null}
+      </> : <View style={styles.homeEmpty}><Text style={styles.homeSectionTitle}>暂无可显示的赛程</Text><Text style={styles.homeSectionSubtitle}>连接赛季数据后，这里会显示正在进行的赛事、赛果和下一站预告。</Text><Pressable accessibilityRole="button" onPress={reload} style={styles.homePrimaryButton}><Text style={styles.homePrimaryButtonText}>重新同步赛程</Text></Pressable></View>}
     </ScrollView>
   );
 }
@@ -1066,15 +1445,16 @@ function StandingsPage({ tab, onTabChange, onOpenDriver, onOpenTeam }: { tab: St
           const id = row.id;
           const driver = tab === 'drivers' ? row as Driver : null;
           const team = tab === 'teams' ? row as Team : driver ? TeamFor(driver.teamId, teams) : teams[0];
+          const teamColorText = tab === 'teams' && !isLightTeamColor(team.color) ? C.white : C.ink;
           return (
-            <Pressable key={id} accessibilityRole="button" onPress={() => driver ? onOpenDriver(driver.id) : onOpenTeam(id)} style={styles.standingRow}>
-              <Text style={[styles.rankNumber, index < 3 && styles.rankNumberTop]}>{String(index + 1).padStart(2, '0')}</Text>
+            <Pressable key={id} accessibilityRole="button" onPress={() => driver ? onOpenDriver(driver.id) : onOpenTeam(id)} style={[styles.standingRow, tab === 'teams' && { backgroundColor: team.color }]}>
+              <Text style={[styles.rankNumber, index < 3 && styles.rankNumberTop, tab === 'teams' && { color: teamColorText }]}>{String(index + 1).padStart(2, '0')}</Text>
               <TeamLogo teamId={team.id} size="standing" />
               <View style={styles.standingCopy}>
-                <Text style={styles.standingName}>{driver ? driver.name : (row as Team).name}</Text>
-                <Text style={styles.standingSub}>{driver ? team.name + ' · ' + driver.code : team.short}</Text>
+                <Text style={[styles.standingName, tab === 'teams' && { color: teamColorText }]}>{driver ? driver.name : (row as Team).name}</Text>
+                <Text style={[styles.standingSub, tab === 'teams' && { color: teamColorText, opacity: 0.78 }]}>{driver ? team.name + ' · ' + driver.code : team.short}</Text>
               </View>
-              <Text style={styles.standingPoints}>{row.points ?? '—'}</Text>
+              <Text style={[styles.standingPoints, tab === 'teams' && { color: teamColorText }]}>{row.points ?? '—'}</Text>
             </Pressable>
           );
         })}
@@ -1094,6 +1474,9 @@ function LibraryPage({ favorites, onToggle, tab, onTabChange, onOpenDriver, onOp
   onOpenTrack: (id: string) => void;
 }) {
   const { races, drivers, teams } = useSeason();
+  const { width: viewportWidth } = useWindowDimensions();
+  const driverListWidth = Math.max(0, Math.min(viewportWidth - (viewportWidth >= 620 ? 70 : 0), 680) - 32);
+  const compactLayout = viewportWidth < 600;
   return (
     <ScrollView contentContainerStyle={styles.pageContent} showsVerticalScrollIndicator={false}>
       <ScreenHeader eyebrow="PADDOCK DIRECTORY" title="资料库" />
@@ -1101,8 +1484,13 @@ function LibraryPage({ favorites, onToggle, tab, onTabChange, onOpenDriver, onOp
       <Text style={styles.libraryIntro}>按车手、车队或赛道浏览本赛季资料。</Text>
       <Segment items={[{ id: 'drivers', label: '车手' }, { id: 'teams', label: '车队' }, { id: 'tracks', label: '赛道' }]} selected={tab} onSelect={onTabChange} />
       <MotionPanel motionKey={tab}>
-        {tab === 'drivers' ? drivers.length ? drivers.map((driver) => <PersonRow key={driver.id} driver={driver} onPress={() => onOpenDriver(driver.id)} favorite={favorites.includes(driver.id)} onFavorite={() => onToggle(driver.id)} />) : <Text style={styles.disclaimer}>本赛季车手名单暂不可用。</Text> : null}
-        {tab === 'teams' ? teams.length ? teams.map((team) => <TeamRow key={team.id} team={team} onPress={() => onOpenTeam(team.id)} favorite={favorites.includes(team.id)} onFavorite={() => onToggle(team.id)} />) : <Text style={styles.disclaimer}>本赛季车队名单暂不可用。</Text> : null}
+        {tab === 'drivers' ? drivers.length ? <View style={[styles.driverListContainer, { width: driverListWidth }]}>{drivers.map((driver) => <DriverListCard key={driver.id} driver={driver} onPress={() => onOpenDriver(driver.id)} />)}</View> : <Text style={styles.disclaimer}>本赛季车手名单暂不可用。</Text> : null}
+        {tab === 'teams' ? teams.length ? <>
+          <View style={styles.teamListHeading}><Text style={styles.teamListTitle}>F1 2026 · 车队</Text><Text style={styles.teamListCount}>{teams.length} TEAMS</Text></View>
+          <View style={styles.teamGrid}>
+            {teams.map((team) => <TeamCard key={team.id} team={team} drivers={drivers} compact={compactLayout} onPress={() => onOpenTeam(team.id)} favorite={favorites.includes(team.id)} onFavorite={() => onToggle(team.id)} />)}
+          </View>
+        </> : <Text style={styles.disclaimer}>本赛季车队名单暂不可用。</Text> : null}
         {tab === 'tracks' ? races.map((race) => (
           <Pressable key={race.id} accessibilityRole="button" onPress={() => onOpenTrack(race.id)} style={styles.trackRow}>
             <View style={styles.trackThumbnail}><Glyph path="M4 16 7 8l5 2 3-6 4 4-3 5 4 4-7 1-4-3-5 1z" color={C.teal} size={22} /></View>
@@ -1195,12 +1583,14 @@ function RaceDetail({ race, onBack, onOpenDriver, favorite, onToggleFavorite }: 
           <View style={styles.resultHeader}><Text style={styles.resultPos}>POS</Text><Text style={styles.resultDriver}>车手 / 车队</Text><Text style={styles.resultGap}>差距</Text><Text style={styles.resultPts}>PTS</Text></View>
           {results.map((result) => {
             const driver = drivers.find((item) => item.id === result.driverId);
-            const team = driver ? TeamFor(driver.teamId, teams) : teams[0];
+            const isSubstitute = result.driverId === 'driver-22' || driver?.code === 'LAW' || driver?.code === 'TSU';
+            const resultTeamId = result.teamId ?? (isSubstitute ? undefined : driver?.teamId);
+            const team = resultTeamId ? teams.find((item) => item.id === resultTeamId) : undefined;
             const statusLabel = result.status === 'dnf' ? ' · 退赛' : result.status === 'dns' ? ' · 未发车' : result.status === 'dsq' ? ' · 取消资格' : '';
             const positionLabel = result.position < 99 ? String(result.position).padStart(2, '0') : result.status.toUpperCase();
-            const driverName = driver?.name ?? `车手 #${result.driverId.replace('driver-', '')}`;
+            const driverName = result.driverName ?? driver?.name ?? (result.driverId === 'driver-22' ? driverNames.TSU : `车手 #${result.driverId.replace('driver-', '')}`);
             const driverMeta = `${driverName}${result.fastestLap ? ' · 最快圈' : ''}${statusLabel}`;
-            return <Pressable key={`${result.driverId}-${result.position}`} disabled={!driver} accessibilityRole="button" accessibilityLabel={`${positionLabel} ${driverName} ${team?.name ?? ''}${statusLabel} ${result.gap}`} onPress={() => driver && onOpenDriver(driver.id)} style={styles.resultRow}><Text style={styles.resultPosition}>{positionLabel}</Text>{team ? <TeamLogo teamId={team.id} size="result" /> : null}<View style={styles.resultDriverCopy}><Text style={styles.resultDriverCode}>{driver?.code ?? '—'}</Text><Text style={styles.resultTeamName} numberOfLines={1}>{driverMeta}</Text></View><Text style={[styles.resultGapValue, (result.status === 'dnf' || result.status === 'dns' || result.status === 'dsq') && styles.retiredText]}>{result.gap}</Text><Text style={styles.resultPointValue}>{result.points ?? '—'}</Text></Pressable>;
+            return <Pressable key={`${result.driverId}-${result.position}`} disabled={!driver} accessibilityRole="button" accessibilityLabel={`${positionLabel} ${driverName} ${team?.name ?? ''}${statusLabel} ${result.gap}`} onPress={() => driver && onOpenDriver(driver.id)} style={styles.resultRow}><Text style={styles.resultPosition}>{positionLabel}</Text>{team ? <TeamLogo teamId={team.id} size="result" /> : null}<View style={styles.resultDriverCopy}><Text style={styles.resultDriverCode}>{result.driverCode ?? driver?.code ?? (result.driverId === 'driver-22' ? 'TSU' : '—')}</Text><Text style={styles.resultTeamName} numberOfLines={1}>{driverMeta}</Text></View><Text style={[styles.resultGapValue, (result.status === 'dnf' || result.status === 'dns' || result.status === 'dsq') && styles.retiredText]}>{result.gap}</Text><Text style={styles.resultPointValue}>{result.points ?? '—'}</Text></Pressable>;
           })}
           {dataSource !== 'calendar' && (resultState !== 'ready' || results.length === 0) ? <View style={styles.upcomingNote}><Text style={styles.upcomingNoteTitle}>{resultState === 'loading' ? '正在载入场次成绩' : resultState === 'error' ? '暂无已缓存的本场成绩' : '暂无已公布成绩'}</Text><Text style={styles.upcomingNoteCopy}>{resultState === 'error' ? 'OpenF1 当前不可用，连接恢复后点上方状态重试。' : '成绩会在官方发布后由 OpenF1 更新。'}</Text></View> : null}
         </MotionPanel> : <View style={styles.upcomingNote}><Text style={styles.upcomingNoteTitle}>本场尚未结束</Text><Text style={styles.upcomingNoteCopy}>场次成绩会在活动结束并公布后显示。</Text></View>}
@@ -1209,18 +1599,46 @@ function RaceDetail({ race, onBack, onOpenDriver, favorite, onToggleFavorite }: 
   );
 }
 
-function DetailHeader({ title, subtitle, onBack, favorite, onToggleFavorite }: { title: string; subtitle: string; onBack: () => void; favorite?: boolean; onToggleFavorite?: () => void }) {
+function DetailHeader({ title, subtitle, onBack, favorite, onToggleFavorite, dark = false }: { title: string; subtitle: string; onBack: () => void; favorite?: boolean; onToggleFavorite?: () => void; dark?: boolean }) {
   return (
-    <View style={styles.detailHeader}>
-      <Pressable accessibilityRole="button" accessibilityLabel="返回" onPress={onBack} style={styles.backButton}><Text style={styles.backArrow}>‹</Text></Pressable>
-      <View style={styles.detailHeaderCopy}><Text style={styles.detailHeaderTitle}>{title}</Text><Text style={styles.detailHeaderSubtitle}>{subtitle}</Text></View>
+    <View style={[styles.detailHeader, dark && styles.detailHeaderDark]}>
+      <Pressable accessibilityRole="button" accessibilityLabel="返回" onPress={onBack} style={[styles.backButton, dark && styles.backButtonDark]}><Text style={[styles.backArrow, dark && styles.backArrowDark]}>‹</Text></Pressable>
+      <View style={styles.detailHeaderCopy}><Text style={[styles.detailHeaderTitle, dark && styles.detailHeaderTitleDark]}>{title}</Text><Text style={[styles.detailHeaderSubtitle, dark && styles.detailHeaderSubtitleDark]}>{subtitle}</Text></View>
       {typeof favorite === 'boolean' && onToggleFavorite ? <FavoriteButton active={favorite} onPress={onToggleFavorite} /> : null}
     </View>
   );
 }
 
+function DriverPortrait({ driver, variant = 'detail', index = 0 }: { driver: Driver; variant?: 'list' | 'detail' | 'team' | 'podium'; index?: number }) {
+  const [attempt, setAttempt] = useState(0);
+  const compact = useWindowDimensions().width < 600;
+  const sourceUrl = driver.headshotUrl;
+  const hasFallback = variant === 'podium' || (sourceUrl?.endsWith('.transform/1col/image.png') ?? false);
+  if (!sourceUrl || attempt > (hasFallback ? 1 : 0)) return null;
+  const imageUrl = variant === 'podium'
+    ? attempt === 0
+      ? sourceUrl.replace('/image/upload/c_lfill,w_440/q_auto/', '/image/upload/c_fill,w_440,h_320,g_north/q_auto/')
+      : sourceUrl
+    : attempt === 0
+      ? sourceUrl.replace(/\.transform\/1col\/image\.png$/, '')
+      : sourceUrl.replace(/\.transform\/1col\/image\.png$/, '.transform/4col/image.png');
+  const image = <Animated.Image accessibilityLabel={`${driver.name}车手照片`} source={{ uri: imageUrl }} resizeMode={variant === 'team' ? 'contain' : 'cover'} style={[styles.driverPortrait, variant === 'podium' ? styles.homePodiumPortrait : variant === 'team' ? styles.teamCardPortrait : variant === 'list' ? compact ? styles.driverListPortraitCompact : styles.driverListPortrait : compact ? styles.driverPortraitStandardCompact : styles.driverPortraitStandard, variant === 'team' && index === 1 && styles.teamCardPortraitSecond]} onError={() => setAttempt((current) => current + 1)} />;
+  return variant === 'detail' ? <View pointerEvents="none" style={styles.driverPortraitStage}>{image}</View> : image;
+}
+
+function isLightTeamColor(color: string) {
+  const hex = color.replace('#', '');
+  const [red, green, blue] = [0, 2, 4].map((index) => Number.parseInt(hex.slice(index, index + 2), 16));
+  return (red * 299 + green * 587 + blue * 114) / 1000 >= 155;
+}
+
 function ProfileDetail({ detail, onBack, favorite, onToggle, onOpenDriver, onOpenTeam }: { detail: Detail; onBack: () => void; favorite: boolean; onToggle: (id: string) => void; onOpenDriver: (id: string) => void; onOpenTeam: (id: string) => void }) {
   const { races, drivers, teams } = useSeason();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const compact = screenWidth < 600 || screenHeight < 600;
+  const posterHeight = compact ? Math.min(620, Math.max(380, Math.round(screenHeight * 0.58))) : 620;
+  const driverScrollRef = useRef<ScrollView>(null);
+  const [driverStatsOffset, setDriverStatsOffset] = useState(0);
   if (detail.kind === 'track') {
     const race = races.find((item) => item.id === detail.id) ?? races[0];
     const facts = circuitFacts[circuitSlug(race) ?? ''];
@@ -1243,56 +1661,136 @@ function ProfileDetail({ detail, onBack, favorite, onToggle, onOpenDriver, onOpe
   if (detail.kind === 'driver' && !driver) return <ScrollView contentContainerStyle={styles.pageContent}><DetailHeader title="车手资料" subtitle="CURRENT SEASON" onBack={onBack} /><DemoNotice /><Text style={styles.emptyCopy}>当前数据中没有这位车手。</Text></ScrollView>;
   if (detail.kind === 'team' && !teams.some((item) => item.id === detail.id)) return <ScrollView contentContainerStyle={styles.pageContent}><DetailHeader title="车队资料" subtitle="CURRENT SEASON" onBack={onBack} /><DemoNotice /><Text style={styles.emptyCopy}>当前数据中没有这支车队。</Text></ScrollView>;
   const team = detail.kind === 'team' ? teams.find((item) => item.id === detail.id) ?? teams[0]! : driver ? TeamFor(driver.teamId, teams) : teams[0]!;
+  const driverNumberColor = C.ink;
   const driverProfile: DriverProfile | undefined = driver ? driverProfiles.find((item) => item.code === driver.code) : undefined;
+  const driverSignature = driverProfile?.source.split('/').pop()?.split('-')[0];
   const teamProfile: TeamProfile | undefined = teamProfiles.find((item) => item.id === team.id);
+  const teamDrivers = drivers.filter((item) => item.teamId === team.id && item.seasonStatus !== 'substitute');
+  const teamHeroTextColor = isLightTeamColor(team.color) ? C.ink : C.white;
   const statValues = (stats: DriverProfile['season'] | TeamProfile['season']) => [
     { label: '大奖赛场次', value: stats.races }, { label: '分站胜利', value: stats.wins },
     { label: '领奖台', value: stats.podiums }, { label: '杆位', value: stats.poles },
     { label: '最快圈', value: stats.fastestLaps },
   ];
   return (
-    <ScrollView contentContainerStyle={styles.pageContent} showsVerticalScrollIndicator={false}>
-      <DetailHeader title={driver ? '车手资料' : '车队资料'} subtitle={driver ? '2026 DRIVER PROFILE' : '2026 TEAM PROFILE'} onBack={onBack} />
-      <DemoNotice />
-      <View style={[styles.profileHero, { borderTopColor: team.color }]}>
-        <View style={styles.profileHeroTop}>{driver ? <View style={[styles.profileMonogram, { backgroundColor: team.color }]}><Text style={styles.profileMonogramText}>{driver.code.slice(0, 1)}</Text></View> : <TeamLogo teamId={team.id} size="profile" />}<FavoriteButton active={favorite} onPress={() => onToggle(driver?.id ?? team.id)} /></View>
-        <Text style={styles.profileName}>{driver ? driver.name : team.name}</Text>
-        <Text style={styles.profileMeta}>{driver ? `${team.name} · ${driver.country} · #${driver.number}${driver.seasonStatus === 'substitute' ? ' · 本季代班参赛' : ''}` : `${team.short} · ${team.base}`}</Text>
-        <View style={styles.profileStats}>
-          <View><Text style={styles.profileStatValue}>{(driver ? driver.points : team.points) ?? '—'}</Text><Text style={styles.profileStatLabel}>2026 积分</Text></View>
-          <View><Text style={styles.profileStatValue}>{driverProfile?.season.wins ?? teamProfile?.season.wins ?? '—'}</Text><Text style={styles.profileStatLabel}>大奖赛胜利</Text></View>
+    <View style={[styles.profileScreen, detail.kind === 'team' && styles.teamProfileScreen]}>
+      {driver ? <View style={[styles.driverDetailTopBar, compact && styles.driverDetailTopBarCompact]}>
+        <Pressable accessibilityRole="button" accessibilityLabel="返回车手列表" onPress={onBack} style={styles.driverDetailBack}><Text style={styles.driverDetailTopText}>‹ 车手列表</Text></Pressable>
+        <View style={styles.driverDetailActions}>
+          <Pressable accessibilityRole="button" accessibilityLabel="查看统计" onPress={() => driverScrollRef.current?.scrollTo({ y: driverStatsOffset, animated: true })} style={styles.driverDetailStats}><Text style={styles.driverDetailTopText}>统计⌄</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="关闭车手详情" onPress={onBack} hitSlop={10} style={styles.driverDetailClose}><Text style={styles.driverDetailCloseText}>×</Text></Pressable>
         </View>
-      </View>
+      </View> : null}
+      <ScrollView ref={driver ? driverScrollRef : undefined} style={styles.profileScroll} contentContainerStyle={driver ? styles.driverPageContent : styles.pageContent} showsVerticalScrollIndicator={false}>
+      {driver ? null : <DetailHeader title="全部车队" subtitle={`${team.name} · 2026 TEAM PROFILE`} onBack={onBack} dark />}
       {driver ? <>
-        <ProfileMetricCard title="2026 赛季统计" values={driverProfile ? statValues(driverProfile.season) : []} />
+        <View style={[styles.driverPoster, compact && styles.driverPosterCompact, { height: posterHeight, backgroundColor: team.color }]}>
+          <Svg pointerEvents="none" width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={styles.driverPosterGradient}>
+            <Defs>
+              <LinearGradient id="driver-poster-gradient" x1="0" y1="0" x2="1" y2="0"><Stop offset="0%" stopColor={C.ink} stopOpacity="0.42" /><Stop offset="48%" stopColor={C.ink} stopOpacity="0.12" /><Stop offset="100%" stopColor={C.white} stopOpacity="0.03" /></LinearGradient>
+              <Pattern id="driver-poster-dots" width="3" height="3" patternUnits="userSpaceOnUse"><Circle cx="1.5" cy="1.5" r="0.3" fill={C.ink} opacity="0.24" /></Pattern>
+            </Defs>
+            <Rect width="100" height="100" fill={team.color} />
+            <Rect width="100" height="100" fill="url(#driver-poster-gradient)" />
+            <Rect width="100" height="24" fill="url(#driver-poster-dots)" opacity="0.48" />
+            <Rect y="24" width="11" height="58" fill="url(#driver-poster-dots)" opacity="0.38" />
+            <Rect x="89" y="24" width="11" height="58" fill="url(#driver-poster-dots)" opacity="0.38" />
+            <SvgText x="50" y="72" textAnchor="middle" fontSize={driver.number < 10 ? 112 : 82} fontWeight="900" fontStyle="italic" fill={driverNumberColor} fillOpacity="0.16">{driver.number}</SvgText>
+          </Svg>
+          <DriverPortrait key={driver.id} driver={driver} variant="detail" />
+          <Svg pointerEvents="none" width="100%" height="45%" viewBox="0 0 100 100" preserveAspectRatio="none" style={styles.driverPosterFade}>
+            <Defs><LinearGradient id="driver-portrait-fade" x1="0" y1="0" x2="0" y2="1"><Stop offset="0%" stopColor={C.ink} stopOpacity="0" /><Stop offset="100%" stopColor={C.ink} stopOpacity="0.78" /></LinearGradient></Defs>
+            <Rect width="100" height="100" fill="url(#driver-portrait-fade)" />
+          </Svg>
+          <View style={[styles.driverPosterInfo, compact && styles.driverPosterInfoCompact]}>
+            {driverSignature ? <Text accessibilityLabel={`${driver.name}的手写风格英文名`} style={[styles.driverPosterSignature, compact && styles.driverPosterSignatureCompact]}>{driverSignature[0].toUpperCase() + driverSignature.slice(1)}</Text> : null}
+            <Text style={[styles.driverPosterName, compact && styles.driverPosterNameCompact]} numberOfLines={2}>{driver.name}</Text>
+            <View style={[styles.driverPosterMeta, compact && styles.driverPosterMetaCompact]}>
+              <View style={styles.driverPosterCountry}><DriverCountryFlag country={driver.country} /><Text style={[styles.driverPosterMetaText, compact && styles.driverPosterMetaTextCompact]}>{driver.country}</Text></View>
+              <View style={styles.driverPosterDivider} />
+              <Pressable accessibilityRole="button" accessibilityLabel={`查看${team.name}车队资料`} onPress={() => onOpenTeam(team.id)}><Text style={[styles.driverPosterMetaText, compact && styles.driverPosterMetaTextCompact]}>{team.name}</Text></Pressable>
+              <View style={styles.driverPosterDivider} />
+              <Text style={[styles.driverPosterMetaText, compact && styles.driverPosterMetaTextCompact]}>{driver.number}</Text>
+            </View>
+          </View>
+        </View>
+        <View style={styles.driverNoticeWrap}><DemoNotice /></View>
+      </> : <>
+        <View style={styles.teamHero}>
+          <View style={[styles.teamHeroStage, { height: compact ? 220 : Math.min(430, Math.max(290, Math.round(screenWidth * 0.28))), backgroundColor: team.color }]}>
+            <Svg pointerEvents="none" width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={styles.teamHeroArtwork}>
+              <Defs>
+                <LinearGradient id={`team-detail-gradient-${team.id}`} x1="0" y1="0" x2="1" y2="1"><Stop offset="0%" stopColor={team.color} stopOpacity="0.12" /><Stop offset="100%" stopColor="#000000" stopOpacity="0.42" /></LinearGradient>
+                <Pattern id={`team-detail-dots-${team.id}`} width="2.5" height="2.5" patternUnits="userSpaceOnUse"><Circle cx="1.25" cy="1.25" r="0.32" fill={C.white} opacity="0.5" /></Pattern>
+              </Defs>
+              <Rect width="100" height="100" fill={`url(#team-detail-gradient-${team.id})`} />
+              <Rect width="100" height="100" fill={`url(#team-detail-dots-${team.id})`} opacity="0.38" />
+              <SvgText x="50" y="61" textAnchor="middle" fontSize="35" fontWeight="900" fontStyle="italic" fill={C.white} fillOpacity="0.12">{team.short}</SvgText>
+            </Svg>
+            <View style={styles.teamHeroTop}>
+              <View style={styles.teamHeroCopy}>
+                <Text style={[styles.teamHeroEyebrow, { color: teamHeroTextColor }]}>{team.short} · 2026</Text>
+                <Text numberOfLines={1} style={[styles.teamHeroFullName, { color: teamHeroTextColor }]}>{teamProfile?.fullName ?? team.name}</Text>
+              </View>
+              <FavoriteButton active={favorite} onPress={() => onToggle(team.id)} color={teamHeroTextColor} />
+            </View>
+            {teamCarImages[team.id] ? <Image accessibilityLabel={`${team.name} 2026赛车`} source={teamCarImages[team.id]} resizeMode="contain" style={styles.teamHeroCar} /> : null}
+          </View>
+          <View style={[styles.teamHeroTitleBand, { borderColor: team.color }]}>
+            <View style={[styles.teamHeroSlash, { backgroundColor: team.color }]} />
+            <Text numberOfLines={1} style={styles.teamHeroTitle}>{team.name}</Text>
+            <View style={[styles.teamHeroSlash, { backgroundColor: team.color }]} />
+          </View>
+          <View style={[styles.teamHeroBrand, { backgroundColor: team.color }]}>
+            <View pointerEvents="none" style={styles.teamHeroBrandShade} />
+            <Text style={styles.teamHeroDriversLabel}>DRIVERS</Text>
+            <View style={styles.teamHeroDriverNames}>
+              {teamDrivers.length ? teamDrivers.map((item) => <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`查看${item.name}车手资料`} onPress={() => onOpenDriver(item.id)} style={styles.teamHeroDriverButton}><Text style={styles.teamHeroDriverName}>{item.name}</Text><Text style={styles.teamHeroDriverCode}>{item.code}</Text></Pressable>) : <Text style={styles.teamHeroDriverName}>暂无车手资料</Text>}
+            </View>
+            <TeamLogo teamId={team.id} size="result" inverse />
+          </View>
+        </View>
+      </>}
+      {driver ? <View style={styles.driverStatsSection} onLayout={({ nativeEvent }) => setDriverStatsOffset(nativeEvent.layout.y)}>
+        {driverProfile ? <View style={styles.profileDataCard}>
+          <Text style={styles.profileDataTitle}>2026 赛季统计</Text>
+          <View style={styles.driverSeasonLeads}>
+            <View style={styles.driverSeasonLead}><Text style={styles.driverSeasonLeadValue}>{driverProfile.points}</Text><Text style={styles.profileMetricLabel}>积分</Text></View>
+            <View style={styles.driverSeasonLead}><Text style={styles.driverSeasonLeadValue}>{driverProfile.season.wins}</Text><Text style={styles.profileMetricLabel}>分站胜利</Text></View>
+          </View>
+          <View style={styles.driverSeasonGrid}>{[
+            { label: '大奖赛场次', value: driverProfile.season.races }, { label: '领奖台', value: driverProfile.season.podiums },
+            { label: '杆位', value: driverProfile.season.poles }, { label: '最快圈', value: driverProfile.season.fastestLaps },
+          ].map((item) => <View key={item.label} style={styles.driverSeasonMetric}><Text style={styles.driverSeasonMetricValue}>{item.value}</Text><Text style={styles.profileMetricLabel}>{item.label}</Text></View>)}</View>
+        </View> : null}
         {driverProfile ? <ProfileMetricCard title="F1 生涯累计" values={[
           { label: '大奖赛参赛', value: driverProfile.career.entered }, { label: '生涯积分', value: driverProfile.career.points },
           { label: '分站胜利', value: driverProfile.career.wins }, { label: '领奖台', value: driverProfile.career.podiums },
           { label: '杆位', value: driverProfile.career.poles }, { label: '世界冠军', value: driverProfile.career.titles },
         ]} /> : null}
-        <View style={styles.sectionHeading}><Text style={styles.sectionTitle}>所属车队</Text></View>
-        <TeamRow team={team} onPress={() => onOpenTeam(team.id)} />
         {driverProfile ? <SourceNote source={driverProfile.source} asOf={libraryStatsAsOf} /> : null}
-      </> : <>
-        <ProfileInfoCard title="车队资料" rows={teamProfile ? [
-          { label: '官方全名', value: teamProfile.fullName }, { label: '基地', value: teamProfile.base },
-          { label: '车队负责人', value: teamProfile.principal }, { label: '技术负责人', value: teamProfile.technicalChief },
-          { label: '底盘', value: teamProfile.chassis }, { label: '动力单元', value: teamProfile.powerUnit },
-          { label: '首次参赛', value: teamProfile.firstEntry },
-        ] : [{ label: '基地', value: team.base }]} />
+      </View> : <>
+        <View style={[styles.sectionHeading, styles.teamSectionHeading]}><Text style={[styles.sectionTitle, styles.teamSectionTitle]}>车手阵容</Text><Text style={styles.sectionMeta}>{teamDrivers.length} DRIVERS</Text></View>
+        <View style={styles.teamDriversGrid}>{teamDrivers.map((item) => <DriverListCard key={item.id} driver={item} column={!compact} onPress={() => onOpenDriver(item.id)} />)}</View>
+        <View style={styles.teamDetailNotice}><DemoNotice /></View>
         {teamProfile ? <>
-          <ProfileMetricCard title="2026 赛季统计" values={statValues(teamProfile.season)} />
+          <ProfileMetricCard title="2026 赛季统计" values={[{ label: '车队积分', value: team.points ?? '—' }, ...statValues(teamProfile.season)]} />
           <ProfileMetricCard title="车队 F1 生涯累计" values={[
             { label: '大奖赛参赛', value: teamProfile.career.entered }, { label: '车队积分', value: teamProfile.career.points },
             { label: '分站胜利', value: teamProfile.career.wins }, { label: '领奖台', value: teamProfile.career.podiums },
             { label: '杆位', value: teamProfile.career.poles }, { label: '车队冠军', value: teamProfile.career.titles },
           ]} />
-        </> : null}
-        <View style={styles.sectionHeading}><Text style={styles.sectionTitle}>本季现役车手</Text></View>
-        {drivers.filter((item) => item.teamId === team.id && item.seasonStatus !== 'substitute').map((item) => <PersonRow key={item.id} driver={item} onPress={() => onOpenDriver(item.id)} />)}
+          <ProfileInfoCard title="车队资料" rows={[
+            { label: '官方全名', value: teamProfile.fullName }, { label: '基地', value: teamProfile.base },
+            { label: '车队负责人', value: teamProfile.principal }, { label: '技术负责人', value: teamProfile.technicalChief },
+            { label: '底盘', value: teamProfile.chassis }, { label: '动力单元', value: teamProfile.powerUnit },
+            { label: '首次参赛', value: teamProfile.firstEntry },
+          ]} />
+        </> : <ProfileInfoCard title="车队资料" rows={[{ label: '基地', value: team.base }]} />}
         {teamProfile ? <SourceNote source={teamProfile.source} asOf={libraryStatsAsOf} /> : null}
       </>}
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -1300,6 +1798,7 @@ function App() {
   const [season, setSeason] = useState<SeasonData | null>(null);
   const [resultsBySession, setResultsBySession] = useState<ResultsBySession>({});
   const [status, setStatus] = useState<SeasonContextValue['status']>('loading');
+  const [errorHint, setErrorHint] = useState<string | null>(null);
   const [dataSource, setDataSource] = useState<SeasonContextValue['dataSource']>('calendar');
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -1334,18 +1833,18 @@ function App() {
   }, [persistSeasonCache]);
   const loadSessionResults = useCallback((sessionKey: string, sessionName: string, refresh = false): Promise<Result[]> => {
     const cached = resultsBySessionRef.current[sessionKey];
-    if (!refresh && cached) return Promise.resolve(cached);
+    if (!refresh && cached && !needsEventTeamRefresh(cached)) return Promise.resolve(cached);
     const existingRequest = sessionRequestsRef.current.get(sessionKey);
     if (existingRequest) return existingRequest;
     const request = (async () => {
       if (!refresh) {
         const legacyCache = await readOpenF1ResultsCache(sessionKey);
-        if (legacyCache) {
+        if (legacyCache && !needsEventTeamRefresh(legacyCache)) {
           saveSessionResults(sessionKey, legacyCache);
           return legacyCache;
         }
         const newlyCached = resultsBySessionRef.current[sessionKey];
-        if (newlyCached) return newlyCached;
+        if (newlyCached && !needsEventTeamRefresh(newlyCached)) return newlyCached;
       }
       const rows = await loadOpenF1Results(sessionKey, driversRef.current, sessionName);
       saveSessionResults(sessionKey, rows);
@@ -1388,6 +1887,7 @@ function App() {
         setSeason(data);
         setDataSource('openf1');
         setSyncedAt(savedAt);
+        setErrorHint(null);
         setStatus('live');
         persistSeasonCache(data, resultsBySessionRef.current, savedAt);
         const completedSessions = data.races.flatMap((race) => race.sessions
@@ -1397,13 +1897,13 @@ function App() {
           let lastRequestAt = 0;
           for (const session of completedSessions) {
             if (!active) return;
-            if (resultsBySessionRef.current[session.id]) continue;
+            if (resultsBySessionRef.current[session.id] && !needsEventTeamRefresh(resultsBySessionRef.current[session.id])) continue;
             const legacyCache = await readOpenF1ResultsCache(session.id);
-            if (legacyCache) {
+            if (legacyCache && !needsEventTeamRefresh(legacyCache)) {
               saveSessionResults(session.id, legacyCache);
               continue;
             }
-            if (!active || resultsBySessionRef.current[session.id]) continue;
+            if (!active || (resultsBySessionRef.current[session.id] && !needsEventTeamRefresh(resultsBySessionRef.current[session.id]))) continue;
             const wait = Math.max(0, 2000 - (Date.now() - lastRequestAt));
             if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
             if (!active) return;
@@ -1419,6 +1919,7 @@ function App() {
       .catch((error) => {
         if (active) {
           const message = error instanceof Error ? error.message : String(error);
+          setErrorHint(describeOpenF1Error(error));
           setStatus(/Live F1 session in progress/i.test(message) || /OpenF1 .*: 40[13]\b/i.test(message) ? 'restricted' : 'offline');
         }
       });
@@ -1428,10 +1929,11 @@ function App() {
     ...(season ?? { races: offlineCalendarRaces, drivers: offlineLibraryDrivers, teams: offlineLibraryTeams }),
     resultsBySession,
     status,
+    errorHint,
     dataSource,
     syncedAt,
     hasSeasonData: season !== null,
-    reload: () => { setStatus('loading'); setReloadKey((key) => key + 1); },
+    reload: () => { setErrorHint(null); setStatus('loading'); setReloadKey((key) => key + 1); },
     saveSessionResults,
     loadSessionResults,
   };
@@ -1440,40 +1942,48 @@ function App() {
 
 function AppContent() {
   const { races } = useSeason();
-  const [section, setSection] = useState<Section>('schedule');
+  const { width: viewportWidth } = useWindowDimensions();
+  const systemColorScheme = useColorScheme();
+  const [fontsLoaded] = useFonts({ F1Signature: require('./assets/fonts/Caveat[wght].ttf') });
+  const [section, setSection] = useState<Section>('home');
   const [scheduleFilter, setScheduleFilter] = useState<ScheduleFilter>('upcoming');
   const [standingsTab, setStandingsTab] = useState<StandingsTab>('drivers');
   const [libraryTab, setLibraryTab] = useState<LibraryTab>('drivers');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailHistory, setDetailHistory] = useState<Detail[]>([]);
+  const driverDetailOpen = detail?.kind === 'driver';
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [themeMode, setThemeMode] = useState<ThemeMode>('system');
   const [storageReady, setStorageReady] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
-  const sectionProgress = useRef(new Animated.Value(1)).current;
-  const transitionAnimation = useRef<Animated.CompositeAnimation | null>(null);
-
+  const isDarkTheme = themeMode === 'dark' || (themeMode === 'system' && systemColorScheme === 'dark');
+  // ponytail: this app has one theme root; use context-bound styles if it grows to multiple roots.
+  styles = isDarkTheme ? darkStyles : lightStyles;
+  C.canvas = isDarkTheme ? '#141619' : '#F5F6F7';
+  C.muted = isDarkTheme ? '#AEB4BC' : '#7D858E';
+  C.line = isDarkTheme ? '#383C42' : '#E8EAED';
   useEffect(() => {
     let active = true;
     const updateReduceMotion = (enabled: boolean) => {
       if (!active) return;
       setReduceMotion(enabled);
-      if (enabled) {
-        transitionAnimation.current?.stop();
-        sectionProgress.setValue(1);
-      }
     };
     AccessibilityInfo.isReduceMotionEnabled().then(updateReduceMotion).catch(() => undefined);
     const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', updateReduceMotion);
     return () => {
       active = false;
       subscription.remove();
-      transitionAnimation.current?.stop();
     };
-  }, [sectionProgress]);
+  }, []);
 
   useEffect(() => {
-    AsyncStorage.getItem('f1-demo-favorites-v1')
-      .then((value) => { if (value) setFavorites(JSON.parse(value) as string[]); })
+    Promise.all([AsyncStorage.getItem('f1-demo-favorites-v1'), AsyncStorage.getItem('f1-theme-mode-v1')])
+      .then(([favoritesValue, savedThemeMode]) => {
+        if (favoritesValue) {
+          try { setFavorites(JSON.parse(favoritesValue) as string[]); } catch { setFavorites([]); }
+        }
+        if (savedThemeMode === 'system' || savedThemeMode === 'light' || savedThemeMode === 'dark') setThemeMode(savedThemeMode);
+      })
       .catch(() => setFavorites([]))
       .finally(() => setStorageReady(true));
   }, []);
@@ -1482,55 +1992,51 @@ function AppContent() {
     if (storageReady) AsyncStorage.setItem('f1-demo-favorites-v1', JSON.stringify(favorites)).catch(() => undefined);
   }, [favorites, storageReady]);
 
-  const playScreenTransition = () => {
-    transitionAnimation.current?.stop();
-    sectionProgress.setValue(reduceMotion ? 0.4 : 0);
-    const animation = Animated.timing(sectionProgress, { toValue: 1, duration: reduceMotion ? 180 : 230, easing: Easing.out(Easing.cubic), useNativeDriver });
-    transitionAnimation.current = animation;
-    animation.start(({ finished }) => {
-      if (finished && transitionAnimation.current === animation) transitionAnimation.current = null;
-    });
-  };
+  useEffect(() => {
+    if (storageReady) AsyncStorage.setItem('f1-theme-mode-v1', themeMode).catch(() => undefined);
+  }, [themeMode, storageReady]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') Appearance.setColorScheme(themeMode === 'system' ? 'unspecified' : themeMode);
+  }, [themeMode]);
+
   const toggleFavorite = (id: string) => setFavorites((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const open = (next: Detail) => {
-    playScreenTransition();
     if (detail) setDetailHistory((history) => [...history, detail]);
     setDetail(next);
   };
   const openDriver = (id: string) => open({ kind: 'driver', id });
   const openTeam = (id: string) => open({ kind: 'team', id });
   const goBack = () => {
-    playScreenTransition();
     if (detailHistory.length > 0) {
       setDetail(detailHistory[detailHistory.length - 1]);
       setDetailHistory((history) => history.slice(0, -1));
     } else setDetail(null);
   };
   const goTo = (next: Section) => {
-    if (next !== section || detail) playScreenTransition();
     setSection(next);
     setDetail(null);
     setDetailHistory([]);
   };
 
-  if (!storageReady) return <SafeAreaView style={styles.loading}><ActivityIndicator color={C.red} /><Text style={styles.loadingText}>正在载入赛季数据…</Text></SafeAreaView>;
+  if (!storageReady || !fontsLoaded) return <SafeAreaView style={styles.loading}><ActivityIndicator color={C.red} /><Text style={styles.loadingText}>正在载入赛季数据…</Text></SafeAreaView>;
 
   return (
     <MotionPreferenceContext.Provider value={reduceMotion}>
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
-      <View style={styles.appRoot}>
-        <View style={styles.rail}>
-          <View style={styles.brandMark}><Text style={styles.brandF}>F</Text><View style={styles.brandSlash} /></View>
-          <View style={styles.railNav}>{navItems.map((item) => {
+    <SafeAreaView style={[styles.safeArea, viewportWidth < 620 && styles.safeAreaMobile]}>
+      <StatusBar style={isDarkTheme ? 'light' : 'dark'} />
+      <View style={[styles.appRoot, viewportWidth < 620 && styles.appRootMobile]}>
+        {!driverDetailOpen ? <View style={[styles.rail, viewportWidth < 620 && styles.bottomNav]}>
+          {viewportWidth >= 620 ? <View style={styles.brandMark}><Text style={styles.brandF}>F</Text><View style={styles.brandSlash} /></View> : null}
+          <View style={[styles.railNav, viewportWidth < 620 && styles.bottomNavItems]}>{navItems.map((item) => {
             const active = !detail && section === item.id;
-            return <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={item.label} accessibilityState={{ selected: active }} onPress={() => goTo(item.id)} style={[styles.railItem, active && styles.railItemActive]}><Glyph path={item.icon} color={active ? C.red : '#747D86'} size={19} /><Text style={[styles.railLabel, active && styles.railLabelActive]}>{item.label}</Text></Pressable>;
+            return <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={item.label} accessibilityState={{ selected: active }} onPress={() => goTo(item.id)} style={[styles.railItem, viewportWidth < 620 && styles.bottomNavItem, active && styles.railItemActive]}><Glyph path={item.icon} color={active ? C.red : '#747D86'} size={19} /><Text style={[styles.railLabel, viewportWidth < 620 && styles.bottomNavLabel, active && styles.railLabelActive]}>{item.label}</Text></Pressable>;
           })}</View>
-          <View style={styles.railFooter}><View style={styles.railFooterLine} /><Text style={styles.railFooterText}>26</Text></View>
-        </View>
-        <Animated.View style={[styles.mainPane, { transform: [{ translateY: sectionProgress.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] }]}>
+          {viewportWidth >= 620 ? <View style={styles.railFooter}><View style={styles.railFooterLine} /><Text style={styles.railFooterText}>26</Text></View> : null}
+        </View> : null}
+        <View style={[styles.mainPane, !detail && section === 'library' && libraryTab === 'teams' && viewportWidth >= 900 && { maxWidth: 1800 }, detail?.kind === 'team' && viewportWidth >= 900 && styles.teamDetailWidePane, driverDetailOpen && styles.driverFullScreenPane]}>
           <View style={styles.routeStack}>
-            {(['schedule', 'live', 'favorites', 'standings', 'library'] as Section[]).map((page) => {
+            {(['home', 'schedule', 'live', 'favorites', 'standings', 'library', 'settings'] as Section[]).map((page) => {
               const active = !detail && section === page;
               const layerProps = {
                 style: [styles.routeLayer, active ? styles.routeLayerActive : styles.routeLayerHidden],
@@ -1541,11 +2047,13 @@ function AppContent() {
               };
               return (
                 <View key={page} {...layerProps}>
+                  {page === 'home' ? <HomePage active={active} onOpenRace={(race) => open({ kind: 'race', id: race.id })} onGoSchedule={() => goTo('schedule')} /> : null}
                   {page === 'schedule' ? <SchedulePage filter={scheduleFilter} onFilterChange={setScheduleFilter} onOpenRace={(race) => open({ kind: 'race', id: race.id })} /> : null}
                   {page === 'live' ? <LiveTimingPage /> : null}
                   {page === 'favorites' ? <FavoritesPage favorites={favorites} onToggle={toggleFavorite} onOpenRace={(id) => open({ kind: 'race', id })} onOpenDriver={openDriver} onOpenTeam={openTeam} onGoLibrary={() => goTo('library')} /> : null}
                   {page === 'standings' ? <StandingsPage tab={standingsTab} onTabChange={setStandingsTab} onOpenDriver={openDriver} onOpenTeam={openTeam} /> : null}
                   {page === 'library' ? <LibraryPage favorites={favorites} onToggle={toggleFavorite} tab={libraryTab} onTabChange={setLibraryTab} onOpenDriver={openDriver} onOpenTeam={openTeam} onOpenTrack={(id) => open({ kind: 'track', id })} /> : null}
+                  {page === 'settings' ? <SettingsPage themeMode={themeMode} onThemeModeChange={setThemeMode} /> : null}
                 </View>
               );
             })}
@@ -1558,7 +2066,7 @@ function AppContent() {
               );
             }) : null}
           </View>
-        </Animated.View>
+        </View>
       </View>
     </SafeAreaView>
     </MotionPreferenceContext.Provider>
@@ -1567,28 +2075,66 @@ function AppContent() {
 
 export default App;
 
-const styles = StyleSheet.create({
+// ponytail: preserve brand colors and map current neutral styles; use semantic tokens if custom neutrals become ambiguous.
+function darkThemeColor(value: string, styleName: string, property: string) {
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value);
+  if (!match) return value;
+  const hex = match[1]!.length === 3 ? [...match[1]!].map((digit) => digit + digit).join('') : match[1]!;
+  const [red, green, blue] = [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+  const highest = Math.max(red!, green!, blue!);
+  const lowest = Math.min(red!, green!, blue!);
+  if (highest - lowest > 24) return value;
+  const lightness = (highest + lowest) / 510;
+  if (property === 'color') return lightness < 0.18 ? '#F1F3F5' : lightness < 0.68 ? '#B2B8C0' : value;
+  if (property.toLowerCase().includes('border')) return lightness > 0.55 ? '#3A3E44' : lightness < 0.18 ? '#464A50' : value;
+  if (property !== 'backgroundColor') return value;
+  if (['safeArea', 'safeAreaMobile', 'loading', 'appRoot', 'appRootMobile', 'routeLayer', 'mainPane', 'profileScreen', 'livePage', 'homeSafeArea', 'homePage'].includes(styleName)) return '#141619';
+  if (styleName === 'segment') return '#2A2D32';
+  if (styleName === 'segmentIndicator') return '#3B3F45';
+  return lightness >= 0.92 ? '#22252A' : lightness >= 0.72 ? '#2C3036' : lightness >= 0.5 ? '#353A41' : lightness < 0.18 ? '#101216' : value;
+}
+
+const lightStyles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: C.canvas },
+  safeAreaMobile: { backgroundColor: C.white },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.white, gap: 12 },
   loadingText: { color: C.muted, fontSize: 13 },
   appRoot: { flex: 1, flexDirection: 'row', backgroundColor: C.canvas },
+  appRootMobile: { flexDirection: 'column-reverse' },
   routeStack: { flex: 1 },
   routeLayer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: C.canvas },
   routeLayerActive: { opacity: 1 },
   routeLayerHidden: { opacity: 0 },
   rail: { width: 70, backgroundColor: C.white, borderRightWidth: 1, borderRightColor: C.line, alignItems: 'center', paddingTop: 15, paddingBottom: 14 },
+  bottomNav: { width: '100%', height: 64, flexDirection: 'row', borderRightWidth: 0, borderTopWidth: 1, borderTopColor: C.line, alignItems: 'center', paddingHorizontal: 3, paddingTop: 3, paddingBottom: 3 },
   brandMark: { width: 37, height: 37, backgroundColor: C.red, borderRadius: 11, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   brandF: { color: C.white, fontSize: 20, fontWeight: '900', fontStyle: 'italic', marginLeft: -3 },
   brandSlash: { position: 'absolute', height: 3, width: 20, backgroundColor: C.white, bottom: 10, right: 3, transform: [{ skewX: '-28deg' }] },
   railNav: { width: '100%', gap: 7, marginTop: 32 },
+  bottomNavItems: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 0, marginTop: 0 },
   railItem: { width: 56, height: 58, borderRadius: 13, justifyContent: 'center', alignItems: 'center', alignSelf: 'center', gap: 4 },
+  bottomNavItem: { flex: 1, width: 'auto', height: 56, alignSelf: 'auto', gap: 2 },
   railItemActive: { backgroundColor: '#FFF0F2' },
   railLabel: { fontSize: 10, lineHeight: 14, color: '#7F8790', fontWeight: '500' },
+  bottomNavLabel: { fontSize: 9, lineHeight: 12 },
   railLabelActive: { color: C.red, fontWeight: '700' },
   railFooter: { marginTop: 'auto', alignItems: 'center', gap: 7 },
   railFooterLine: { width: 24, height: 1, backgroundColor: C.line },
   railFooterText: { fontSize: 10, color: '#9BA2A9', fontWeight: '700', letterSpacing: 1 },
   mainPane: { flex: 1, maxWidth: 680, alignSelf: 'stretch', backgroundColor: C.canvas },
+  teamDetailWidePane: { maxWidth: 1800 },
+  driverFullScreenPane: { maxWidth: '100%' },
+  profileScreen: { flex: 1, minHeight: 0, backgroundColor: C.canvas },
+  teamProfileScreen: { backgroundColor: C.ink },
+  profileScroll: { flex: 1, minHeight: 0 },
+  driverDetailTopBar: { height: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.ink, paddingHorizontal: 17 },
+  driverDetailTopBarCompact: { height: 52, paddingHorizontal: 12 },
+  driverDetailBack: { minHeight: 44, justifyContent: 'center' },
+  driverDetailActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  driverDetailStats: { minHeight: 44, justifyContent: 'center' },
+  driverDetailTopText: { color: C.white, fontSize: 14, fontWeight: '800' },
+  driverDetailClose: { width: 36, height: 40, alignItems: 'center', justifyContent: 'center' },
+  driverDetailCloseText: { color: C.white, fontSize: 29, lineHeight: 34, fontWeight: '400' },
   livePage: { flex: 1, backgroundColor: C.canvas },
   liveContent: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 30 },
   liveHero: { backgroundColor: C.ink, borderRadius: 17, padding: 17, marginBottom: 22, overflow: 'hidden', borderTopWidth: 3, borderTopColor: C.red },
@@ -1619,16 +2165,100 @@ const styles = StyleSheet.create({
   liveNoticeMark: { width: 15, height: 15, borderRadius: 8, backgroundColor: '#F7DADD', alignItems: 'center', justifyContent: 'center', marginTop: 1 },
   liveNoticeMarkText: { color: C.red, fontSize: 9, lineHeight: 12, fontWeight: '800' },
   liveNoticeText: { flex: 1, color: '#8B535B', fontSize: 9, lineHeight: 14 },
+  homeSafeArea: { backgroundColor: C.canvas },
+  homePage: { flex: 1, backgroundColor: C.canvas },
+  homeContent: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 34 },
+  homeHeader: { minHeight: 57, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11 },
+  homeEyebrow: { color: C.muted, fontSize: 8, fontWeight: '800', letterSpacing: 1.3, marginBottom: 3 },
+  homeTitle: { color: C.ink, fontSize: 25, lineHeight: 30, fontWeight: '900', letterSpacing: -0.5 },
+  homeScheduleLink: { minHeight: 37, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: C.line, borderRadius: 10, backgroundColor: C.white },
+  homeScheduleLinkText: { color: C.ink, fontSize: 10, fontWeight: '700' },
+  homeHero: { backgroundColor: C.white, borderRadius: 17, padding: 14, marginBottom: 20, overflow: 'hidden', borderWidth: 1, borderColor: C.line, borderTopWidth: 3, borderTopColor: C.red },
+  homeHeroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  homeHeroKicker: { color: C.muted, fontSize: 9, fontWeight: '800', letterSpacing: 0.6, flexShrink: 1 },
+  homeLiveBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#FFF0F2', paddingHorizontal: 8, paddingVertical: 5, borderRadius: 20 },
+  homeLiveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.red },
+  homeLiveBadgeText: { color: C.red, fontSize: 7, fontWeight: '900', letterSpacing: 0.7 },
+  homeHeroBody: { flexDirection: 'row', alignItems: 'center', marginTop: 13, marginBottom: 13 },
+  homeHeroCopy: { flex: 1, minWidth: 0 },
+  homeHeroTitle: { color: C.ink, fontSize: 21, lineHeight: 27, fontWeight: '900', letterSpacing: -0.5 },
+  homeHeroVenue: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 9 },
+  homeHeroVenueCopy: { flex: 1 },
+  homeHeroVenueName: { color: C.ink, fontSize: 10, fontWeight: '700' },
+  homeHeroCountry: { color: C.muted, fontSize: 9, marginTop: 2 },
+  homeHeroDate: { color: C.muted, fontSize: 10, marginTop: 8, fontWeight: '600' },
+  homeCircuitImage: { width: 140, height: 88, marginLeft: 8, opacity: 0.82 },
+  homePrimaryButton: { minHeight: 41, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 10, backgroundColor: C.red, paddingHorizontal: 12, marginTop: 3 },
+  homePrimaryButtonText: { color: C.white, fontSize: 11, fontWeight: '800' },
+  homePrimaryButtonArrow: { color: C.white, fontSize: 19, lineHeight: 22, fontWeight: '700' },
+  homeCurrentSession: { borderTopWidth: 1, borderTopColor: C.line, marginTop: 13, paddingTop: 12 },
+  homeCurrentLabel: { color: C.muted, fontSize: 9, fontWeight: '700' },
+  homeCurrentName: { color: C.ink, fontSize: 15, fontWeight: '900', marginTop: 4 },
+  homeCurrentTime: { color: C.muted, fontSize: 9, marginTop: 4 },
+  homeOfficialLink: { alignSelf: 'flex-start', paddingVertical: 8 },
+  homeOfficialLinkText: { color: '#FF7185', fontSize: 9, fontWeight: '800' },
+  homeCountdown: { flexDirection: 'row', alignItems: 'flex-end', gap: 7, borderTopWidth: 1, borderTopColor: C.line, marginTop: 13, paddingTop: 12 },
+  homeCountdownCell: { flexDirection: 'row', alignItems: 'baseline', gap: 3 },
+  homeCountdownValue: { color: C.red, fontSize: 21, lineHeight: 26, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  homeCountdownUnit: { color: C.muted, fontSize: 8 },
+  homeResults: { borderTopWidth: 1, borderTopColor: C.line, marginTop: 13, paddingTop: 10 },
+  homePodium: { flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
+  homePodiumCard: { flex: 1, minWidth: 0, alignItems: 'center', backgroundColor: '#F5F6F7', borderRadius: 11, paddingHorizontal: 5, paddingTop: 6, paddingBottom: 7, overflow: 'hidden' },
+  homePodiumCardWinner: { backgroundColor: '#F0F8F6', borderWidth: 1, borderColor: '#C8E7DF', paddingBottom: 8 },
+  homePodiumRank: { alignSelf: 'flex-start', color: C.muted, fontSize: 16, lineHeight: 19, fontWeight: '900', marginBottom: 4 },
+  homePodiumRankWinner: { color: '#A77A19', fontSize: 18, lineHeight: 21 },
+  homePodiumPhoto: { width: '100%', height: 126, backgroundColor: '#E7E7E7', borderRadius: 8, position: 'relative', overflow: 'hidden' },
+  homePodiumPhotoWinner: { height: 150 },
+  homePodiumName: { alignSelf: 'stretch', color: C.ink, fontSize: 9, fontWeight: '800', textAlign: 'center', marginTop: 6 },
+  homePodiumPoints: { color: C.red, fontSize: 8, fontWeight: '800', marginTop: 4 },
+  homePodiumPointsWinner: { color: '#A77A19', fontSize: 9 },
+  homeResultEmpty: { paddingVertical: 12, gap: 5 },
+  homeResultEmptyText: { color: C.muted, fontSize: 9 },
+  homeRetryText: { color: '#FF7185', fontSize: 9, fontWeight: '800' },
+  homeSchedulePending: { color: C.muted, fontSize: 9, lineHeight: 15 },
+  homeSectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9 },
+  homeSectionTitle: { color: C.ink, fontSize: 14, fontWeight: '900' },
+  homeSectionSubtitle: { color: C.muted, fontSize: 8, marginTop: 3 },
+  homeSectionMark: { color: C.red, fontSize: 21, fontWeight: '700' },
+  homeDayGroup: { marginBottom: 9 },
+  homeDayTitle: { color: C.ink, fontSize: 10, fontWeight: '800', marginBottom: 6, marginLeft: 2 },
+  homeSessionRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 11, paddingHorizontal: 11, marginBottom: 6 },
+  homeSessionRowActive: { borderWidth: 1, borderColor: C.red },
+  homeSessionDot: { width: 8, height: 8, borderRadius: 4 },
+  homeSessionCopy: { flex: 1 },
+  homeSessionName: { color: C.ink, fontSize: 10, fontWeight: '700' },
+  homeSessionStatus: { color: C.red, fontSize: 7, fontWeight: '800', marginTop: 2 },
+  homeSessionTime: { fontSize: 9, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  homeSchedulePendingCard: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 11, padding: 12, gap: 7, marginBottom: 11 },
+  homeNextSection: { marginTop: 9 },
+  homeNextCard: { minHeight: 75, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 11 },
+  homeNextCopy: { flex: 1 },
+  homeNextTitle: { color: C.ink, fontSize: 11, fontWeight: '900' },
+  homeNextVenue: { color: C.muted, fontSize: 8, marginTop: 3 },
+  homeNextDate: { color: C.red, fontSize: 8, fontWeight: '700', marginTop: 5 },
+  homeNextArrow: { color: C.red, fontSize: 23, fontWeight: '700' },
+  homeEmpty: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 14, padding: 16, gap: 9 },
   pageContent: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 30 },
+  driverPageContent: { width: '100%', paddingBottom: 30 },
+  driverListContainer: { alignSelf: 'flex-start' },
   screenHeader: { minHeight: 62, flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   eyebrow: { color: C.muted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2, marginBottom: 4 },
   screenTitle: { color: C.ink, fontSize: 27, lineHeight: 32, fontWeight: '800', letterSpacing: -0.8 },
+  settingsCard: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 15, padding: 15, marginTop: 5 },
+  settingsHeader: { flexDirection: 'row', alignItems: 'center', gap: 11, marginBottom: 15 },
+  settingsIcon: { width: 38, height: 38, borderRadius: 11, backgroundColor: '#FFF0F2', alignItems: 'center', justifyContent: 'center' },
+  settingsTitle: { color: C.ink, fontSize: 13, fontWeight: '800' },
+  settingsDescription: { color: C.muted, fontSize: 10, marginTop: 3 },
+  settingsHint: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: -9 },
   seasonBadge: { minWidth: 49, height: 31, borderRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.white, alignItems: 'center', justifyContent: 'center' },
   seasonBadgeText: { color: C.ink, fontSize: 12, fontWeight: '800' },
-  demoNotice: { minHeight: 29, borderRadius: 8, backgroundColor: '#FFF3F4', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, marginBottom: 15, gap: 7 },
-  demoDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.red },
+  demoNotice: { minHeight: 29, flexDirection: 'row', alignItems: 'center', marginBottom: 15, gap: 8 },
+  demoNoticeButton: { minHeight: 28, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 9, borderRadius: 16, backgroundColor: '#E9ECEF', gap: 6 },
+  demoDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.muted },
   liveDot: { backgroundColor: C.teal },
-  demoNoticeText: { color: '#9A4855', fontSize: 10, fontWeight: '600' },
+  errorDot: { backgroundColor: C.red },
+  demoNoticeText: { color: C.ink, fontSize: 10, fontWeight: '600' },
+  demoNoticeCredit: { flexShrink: 1, color: C.muted, fontSize: 9, lineHeight: 12 },
   noSeasonState: { alignItems: 'center', backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 15, paddingHorizontal: 18, paddingVertical: 24, marginTop: 4, marginBottom: 12 },
   noSeasonIcon: { width: 46, height: 46, borderRadius: 14, backgroundColor: '#FFF0F2', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   noSeasonTitle: { color: C.ink, fontSize: 14, fontWeight: '800' },
@@ -1691,6 +2321,8 @@ const styles = StyleSheet.create({
   rowSub: { color: C.muted, fontSize: 9, marginTop: 4 },
   rowNumber: { color: '#9BA2A9', fontSize: 12, fontWeight: '700' },
   teamLogoBadge: { alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 7, padding: 4, overflow: 'hidden' },
+  teamLogoPlain: { backgroundColor: 'transparent', borderWidth: 0, borderRadius: 0, padding: 0 },
+  teamLogoImage: { width: '100%', height: '100%' },
   teamPoints: { color: C.ink, fontSize: 15, fontWeight: '800' },
   pointsUnit: { color: C.muted, fontSize: 9, fontWeight: '500' },
   favoriteButton: { minWidth: 35, minHeight: 40, alignItems: 'center', justifyContent: 'center' },
@@ -1715,15 +2347,40 @@ const styles = StyleSheet.create({
   standingPoints: { width: 42, textAlign: 'right', color: C.ink, fontSize: 14, fontWeight: '800' },
   disclaimer: { color: '#9AA2AA', fontSize: 9, lineHeight: 15, marginTop: 16, marginBottom: 5 },
   libraryIntro: { color: C.muted, fontSize: 11, lineHeight: 17, marginTop: 1, marginBottom: 15 },
+  teamListHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 15, marginBottom: 10 },
+  teamListTitle: { color: C.ink, fontSize: 14, fontWeight: '900' },
+  teamListCount: { color: C.muted, fontSize: 8, fontWeight: '800', letterSpacing: 1 },
+  teamGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 12 },
+  teamCard: { minHeight: 200, borderRadius: 13, overflow: 'hidden', marginBottom: 2 },
+  teamCardMain: { position: 'relative', flex: 1, padding: 13, overflow: 'hidden' },
+  teamCardHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', zIndex: 1 },
+  teamCardTitleBlock: { flex: 1, maxWidth: '74%', paddingTop: 2 },
+  teamCardName: { fontSize: 18, lineHeight: 22, fontWeight: '900', letterSpacing: -0.35 },
+  teamCardCode: { fontSize: 8, lineHeight: 11, fontWeight: '900', letterSpacing: 1.1, opacity: 0.76, marginTop: 3 },
+  teamCardDrivers: { flexDirection: 'row', gap: 10, maxWidth: '73%', marginTop: 7, zIndex: 1 },
+  teamCardDriver: { flexShrink: 1, fontSize: 9, lineHeight: 13, fontWeight: '700' },
+  teamCardDriverCode: { fontSize: 7, fontWeight: '900', opacity: 0.78 },
+  teamCardCar: { position: 'absolute', left: '1%', bottom: '-4%', width: '98%', height: '62%', zIndex: 0 },
+  teamCardPortrait: { position: 'absolute', right: '3%', bottom: '-45%', width: '58%', height: '145%', zIndex: 0 },
+  teamCardPortraitSecond: { right: '25%', bottom: '-32%', width: '54%', height: '132%', opacity: 0.94 },
+  teamCardFooter: { height: 36, flexDirection: 'row', alignItems: 'center', paddingLeft: 12, paddingRight: 5, backgroundColor: 'rgba(0,0,0,0.16)' },
+  teamCardBase: { flex: 1, color: 'rgba(255,255,255,0.84)', fontSize: 8, fontWeight: '600', paddingRight: 4 },
+  teamCardPoints: { color: C.white, fontSize: 11, fontWeight: '900' },
+  teamCardPointsLabel: { fontSize: 7, fontWeight: '800' },
   trackRow: { minHeight: 74, borderBottomWidth: 1, borderBottomColor: C.line, flexDirection: 'row', alignItems: 'center', gap: 11 },
   trackThumbnail: { width: 40, height: 40, borderRadius: 11, backgroundColor: '#E8F1F0', alignItems: 'center', justifyContent: 'center' },
   rowChevron: { color: '#9BA2A9', fontSize: 25, paddingHorizontal: 5 },
   detailHeader: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 11, marginBottom: 8 },
+  detailHeaderDark: { marginBottom: 8 },
   backButton: { width: 34, height: 34, borderRadius: 10, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
+  backButtonDark: { backgroundColor: '#272A31', borderColor: '#41454D' },
   backArrow: { color: C.ink, fontSize: 28, lineHeight: 30, marginTop: -3 },
+  backArrowDark: { color: C.white },
   detailHeaderCopy: { flex: 1 },
   detailHeaderTitle: { color: C.ink, fontSize: 15, fontWeight: '800' },
+  detailHeaderTitleDark: { color: C.white },
   detailHeaderSubtitle: { color: C.muted, fontSize: 9, marginTop: 2 },
+  detailHeaderSubtitleDark: { color: '#A9AEB7' },
   detailTitleBlock: { marginTop: 3, marginBottom: 14 },
   detailRaceName: { color: C.ink, fontSize: 21, lineHeight: 27, fontWeight: '800', letterSpacing: -0.5 },
   detailRaceVenue: { color: C.muted, fontSize: 11, marginTop: 4 },
@@ -1764,15 +2421,28 @@ const styles = StyleSheet.create({
   upcomingNote: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 13, padding: 14 },
   upcomingNoteTitle: { color: C.ink, fontSize: 12, fontWeight: '800' },
   upcomingNoteCopy: { color: C.muted, fontSize: 10, lineHeight: 16, marginTop: 4 },
-  profileHero: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderTopWidth: 3, borderRadius: 15, padding: 15, marginTop: 2, marginBottom: 18 },
-  profileHeroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  profileMonogram: { width: 54, height: 54, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  profileMonogramText: { color: C.white, fontSize: 22, fontWeight: '900', fontStyle: 'italic' },
-  profileName: { color: C.ink, fontSize: 20, fontWeight: '800', marginTop: 14 },
-  profileMeta: { color: C.muted, fontSize: 10, marginTop: 4 },
-  profileStats: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.line, marginTop: 15, paddingTop: 13, gap: 36 },
-  profileStatValue: { color: C.ink, fontSize: 17, fontWeight: '900' },
-  profileStatLabel: { color: C.muted, fontSize: 8, marginTop: 3 },
+  teamHero: { marginHorizontal: -16, marginTop: -1 },
+  teamHeroStage: { position: 'relative', justifyContent: 'space-between', overflow: 'hidden' },
+  teamHeroArtwork: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  teamHeroTop: { zIndex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, paddingTop: 12 },
+  teamHeroCopy: { flex: 1, paddingRight: 14 },
+  teamHeroEyebrow: { color: C.white, fontSize: 8, fontWeight: '900', letterSpacing: 1.3 },
+  teamHeroFullName: { color: C.white, fontSize: 10, fontWeight: '700', marginTop: 3, textShadowColor: 'rgba(0,0,0,0.35)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
+  teamHeroCar: { position: 'absolute', left: '3%', bottom: 10, width: '94%', height: '67%' },
+  teamHeroTitleBand: { height: 66, backgroundColor: C.white, borderTopWidth: 2, borderBottomWidth: 2, borderColor: C.teal, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  teamHeroSlash: { width: 17, height: 48, backgroundColor: C.teal, transform: [{ skewX: '-28deg' }], marginHorizontal: 17 },
+  teamHeroTitle: { maxWidth: '62%', color: C.ink, fontSize: 27, lineHeight: 34, fontWeight: '900', letterSpacing: -0.7, textAlign: 'center' },
+  teamHeroBrand: { minHeight: 112, alignItems: 'center', justifyContent: 'center', paddingVertical: 12, paddingHorizontal: 14, overflow: 'hidden' },
+  teamHeroBrandShade: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(0,0,0,0.55)' },
+  teamHeroDriversLabel: { fontSize: 8, fontWeight: '900', letterSpacing: 1.5, opacity: 0.82 },
+  teamHeroDriverNames: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: 14, marginTop: 5, marginBottom: 6 },
+  teamHeroDriverButton: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  teamHeroDriverName: { color: C.white, fontSize: 12, fontWeight: '800' },
+  teamHeroDriverCode: { color: C.white, fontSize: 8, fontWeight: '900', opacity: 0.72 },
+  teamDetailNotice: { paddingTop: 13 },
+  teamSectionHeading: { marginTop: 4 },
+  teamSectionTitle: { color: C.white, fontSize: 21, letterSpacing: -0.5 },
+  teamDriversGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   profileDataCard: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 14, paddingHorizontal: 13, paddingVertical: 12, marginBottom: 12 },
   profileDataTitle: { color: C.ink, fontSize: 11, fontWeight: '800', marginBottom: 12 },
   profileMetricGrid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 14 },
@@ -1784,4 +2454,58 @@ const styles = StyleSheet.create({
   profileInfoValue: { flex: 1, color: C.ink, fontSize: 9, lineHeight: 14, fontWeight: '600' },
   profileSource: { alignSelf: 'flex-start', paddingVertical: 8, marginBottom: 8 },
   profileSourceText: { color: C.muted, fontSize: 8, textDecorationLine: 'underline' },
+  driverListItem: { position: 'relative', width: '100%', aspectRatio: 2.35, minHeight: 155, marginBottom: 14 },
+  driverListItemCompact: { minHeight: 132 },
+  driverListCard: { flex: 1, position: 'relative', borderRadius: 12, overflow: 'hidden' },
+  driverListNumberBack: { position: 'absolute', zIndex: 0, right: '12%', bottom: 0, flexDirection: 'row', alignItems: 'flex-end', opacity: 0.24 },
+  driverListNumberBackCompact: { bottom: 8 },
+  driverListNumberBackText: { fontSize: 154, lineHeight: 165, fontWeight: '900', fontStyle: 'italic' },
+  driverListNumberBackTextCompact: { fontSize: 98, lineHeight: 108 },
+  driverListCopy: { position: 'absolute', top: 16, bottom: 12, left: 17, width: '52%', zIndex: 2 },
+  driverListCopyCompact: { top: 13, left: 14, bottom: 11, width: '60%', zIndex: 2 },
+  driverListName: { fontSize: 18, lineHeight: 22, fontWeight: '900', maxWidth: '94%' },
+  driverListNameCompact: { fontSize: 15, lineHeight: 19 },
+  driverListTeam: { fontSize: 11, fontWeight: '800', opacity: 0.82, marginTop: 5 },
+  driverListNumber: { fontSize: 32, lineHeight: 36, fontWeight: '900', marginTop: 5 },
+  driverListNumberCompact: { fontSize: 27, lineHeight: 31, marginTop: 4 },
+  driverListFlag: { position: 'absolute', left: 0, bottom: 0 },
+  driverCountryFlag: { width: 24, height: 16 },
+  driverPoster: { position: 'relative', height: 620, overflow: 'hidden', alignItems: 'center' },
+  driverPosterCompact: { minHeight: 0 },
+  driverPosterGradient: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 },
+  driverPosterFade: { position: 'absolute', right: 0, bottom: 0, left: 0 },
+  driverPortraitStage: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, alignItems: 'center' },
+  driverPortrait: { position: 'absolute' },
+  homePodiumPortrait: { top: '5%', left: '6%', width: '88%', height: '90%', borderRadius: 5 },
+  driverListPortrait: { top: 0, right: 0, width: '39%', maxWidth: 430, aspectRatio: 440 / 1265, zIndex: 1 },
+  driverListPortraitCompact: { top: 0, right: '7%', width: '39%', maxWidth: 430, aspectRatio: 440 / 1265, zIndex: 1 },
+  driverPortraitStandard: { top: -56, width: '76%', maxWidth: 450, aspectRatio: 440 / 1265, alignSelf: 'center' },
+  driverPortraitStandardCompact: { top: '16%', width: '70%', maxWidth: 340, aspectRatio: 440 / 1265, alignSelf: 'center' },
+  driverPosterInfo: { position: 'absolute', left: 12, right: 12, bottom: 25, alignItems: 'center', zIndex: 1 },
+  driverPosterInfoCompact: { bottom: 24 },
+  driverPosterSignature: { color: C.white, fontFamily: 'F1Signature', fontSize: 62, lineHeight: 70, transform: [{ rotate: '-7deg' }], textShadowColor: 'rgba(0,0,0,0.25)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 5 },
+  driverPosterSignatureCompact: { fontSize: 44, lineHeight: 54 },
+  driverPosterName: { maxWidth: '94%', color: C.white, fontSize: 37, lineHeight: 46, fontWeight: '900', textAlign: 'center', marginTop: -3, textShadowColor: 'rgba(0,0,0,0.36)', textShadowOffset: { width: 0, height: 2 }, textShadowRadius: 6 },
+  driverPosterNameCompact: { fontSize: 26, lineHeight: 34 },
+  driverPosterMeta: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 9, marginTop: 12 },
+  driverPosterMetaCompact: { gap: 6, marginTop: 8 },
+  driverPosterCountry: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  driverPosterMetaText: { color: C.white, fontSize: 14, fontWeight: '800' },
+  driverPosterMetaTextCompact: { fontSize: 12 },
+  driverPosterDivider: { width: 1, height: 14, backgroundColor: C.white, opacity: 0.55 },
+  driverNoticeWrap: { width: '100%', maxWidth: 1040, alignSelf: 'center', paddingHorizontal: 16, paddingTop: 12 },
+  driverStatsSection: { width: '100%', maxWidth: 1040, alignSelf: 'center', paddingHorizontal: 16, paddingTop: 3 },
+  driverSeasonLeads: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#F1F2F3', paddingBottom: 11, marginBottom: 12 },
+  driverSeasonLead: { flex: 1 },
+  driverSeasonLeadValue: { color: C.ink, fontSize: 26, fontWeight: '900' },
+  driverSeasonGrid: { flexDirection: 'row' },
+  driverSeasonMetric: { width: '25%' },
+  driverSeasonMetricValue: { color: C.ink, fontSize: 15, fontWeight: '900' },
 });
+
+const darkStyleDefinitions = Object.fromEntries(Object.entries(lightStyles).map(([styleName, style]) => [
+  styleName,
+  Object.fromEntries(Object.entries(style).map(([property, value]) => [property, typeof value === 'string' ? darkThemeColor(value, styleName, property) : value])),
+])) as typeof lightStyles;
+const darkStyles = StyleSheet.create(darkStyleDefinitions);
+let styles = lightStyles;
