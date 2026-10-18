@@ -14,10 +14,10 @@ F1 Gridline 是一款非官方 F1 赛事伴侣，提供赛程、实时赛况入�
 
 ## 下载
 
-- Android APK：[下载最新版](https://github.com/ConTr0L0/gridline-racing/releases/latest/download/F1-Gridline-Android.apk)
-- [查看所有版本](https://github.com/ConTr0L0/gridline-racing/releases)
+- Android APK：[EAS 安装页](https://expo.dev/accounts/contr0l/projects/f1-season-guide/builds/d05cb6c8-a5d4-4282-8425-ae727dc4208f)
+- [查看 GitHub Release](https://github.com/ConTr0L0/gridline-racing/releases)
 
-当前尚未发布 Android APK；直链会在安装包上传到 GitHub Release 后生效。
+此 EAS 安装链接有效至 2026-11-01；到期后需要重新构建并更新链接。
 
 ## 本地运行
 
