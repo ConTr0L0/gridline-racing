@@ -1,0 +1,87 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:id="@+id/widget_root"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:orientation="vertical"
+  android:padding="14dp"
+  android:contentDescription="@string/gridline_widget_description"
+  android:background="@drawable/gridline_widget_bg">
+
+  <LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+    <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="F1 GRIDLINE" android:textColor="@color/widget_muted" android:textSize="10sp" android:textStyle="bold" android:letterSpacing="0.08" />
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="2026" android:textColor="@color/widget_red" android:textSize="10sp" android:textStyle="bold" />
+  </LinearLayout>
+
+  <TextView android:id="@+id/widget_empty" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center" android:text="打开 F1 Gridline 同步赛程与积分榜" android:textColor="@color/widget_text" android:textSize="15sp" android:visibility="gone" />
+
+  <LinearLayout
+    android:id="@+id/widget_content"
+    android:layout_width="match_parent"
+    android:layout_height="0dp"
+    android:layout_weight="1"
+    android:orientation="vertical">
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:gravity="center_vertical" android:orientation="horizontal">
+      <View android:layout_width="3dp" android:layout_height="36dp" android:background="@color/widget_red" />
+      <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:layout_marginStart="9dp" android:orientation="vertical">
+        <TextView android:id="@+id/widget_race_state" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/widget_red" android:textSize="10sp" android:textStyle="bold" />
+        <TextView android:id="@+id/widget_race_name" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_text" android:textSize="19sp" android:textStyle="bold" />
+        <TextView android:id="@+id/widget_race_location" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_muted" android:textSize="11sp" />
+      </LinearLayout>
+      <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:gravity="end" android:orientation="vertical">
+        <Chronometer android:id="@+id/widget_countdown" android:layout_width="wrap_content" android:layout_height="wrap_content" android:format="%s" android:textColor="@color/widget_text" android:textSize="17sp" android:textStyle="bold" />
+        <TextView android:id="@+id/widget_live" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="LIVE" android:textColor="@color/widget_red" android:textSize="15sp" android:textStyle="bold" android:visibility="gone" />
+        <TextView android:id="@+id/widget_race_date" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="@color/widget_muted" android:textSize="9sp" />
+      </LinearLayout>
+    </LinearLayout>
+
+    <View android:layout_width="match_parent" android:layout_height="1dp" android:layout_marginTop="10dp" android:layout_marginBottom="9dp" android:background="@color/widget_line" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+      <LinearLayout android:layout_width="0dp" android:layout_height="60dp" android:layout_weight="1" android:layout_marginEnd="5dp" android:padding="9dp" android:background="@drawable/gridline_widget_surface" android:orientation="vertical">
+        <TextView android:id="@+id/widget_driver_label" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/widget_muted" android:textSize="9sp" android:textStyle="bold" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal">
+          <ImageView android:id="@+id/widget_driver_photo" android:layout_width="30dp" android:layout_height="30dp" android:layout_marginEnd="6dp" android:background="@drawable/gridline_widget_photo_bg" android:clipToOutline="true" android:contentDescription="@string/widget_driver_photo_description" android:scaleType="centerCrop" android:src="@drawable/gridline_widget_driver_placeholder" />
+          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/widget_driver_name" android:layout_width="match_parent" android:layout_height="wrap_content" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_text" android:textSize="12sp" android:textStyle="bold" />
+            <TextView android:id="@+id/widget_driver_score" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_red" android:textSize="9sp" android:textStyle="bold" />
+          </LinearLayout>
+        </LinearLayout>
+      </LinearLayout>
+      <LinearLayout android:layout_width="0dp" android:layout_height="60dp" android:layout_weight="1" android:layout_marginStart="5dp" android:padding="9dp" android:background="@drawable/gridline_widget_surface" android:orientation="vertical">
+        <TextView android:id="@+id/widget_team_label" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/widget_muted" android:textSize="9sp" android:textStyle="bold" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal">
+          <FrameLayout android:id="@+id/widget_team_logo_tile" android:layout_width="30dp" android:layout_height="30dp" android:layout_marginEnd="6dp" android:background="@drawable/gridline_widget_logo_bg" android:clipToOutline="true">
+            <ImageView android:id="@+id/widget_team_logo" android:layout_width="match_parent" android:layout_height="match_parent" android:contentDescription="@string/widget_team_logo_description" android:padding="3dp" android:scaleType="fitCenter" />
+          </FrameLayout>
+          <TextView android:id="@+id/widget_team_name" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_text" android:textSize="12sp" android:textStyle="bold" />
+        </LinearLayout>
+        <TextView android:id="@+id/widget_team_score" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="@color/widget_red" android:textSize="10sp" android:textStyle="bold" />
+      </LinearLayout>
+    </LinearLayout>
+
+    <View android:layout_width="match_parent" android:layout_height="1dp" android:layout_marginTop="9dp" android:layout_marginBottom="7dp" android:background="@color/widget_line" />
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="horizontal">
+      <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_marginEnd="7dp" android:orientation="vertical">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><TextView android:layout_width="22dp" android:layout_height="wrap_content" android:text="POS" android:textColor="@color/widget_muted" android:textSize="8sp" /><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="车手榜" android:textColor="@color/widget_text" android:textSize="10sp" android:textStyle="bold" /><TextView android:layout_width="32dp" android:layout_height="wrap_content" android:gravity="end" android:text="PTS" android:textColor="@color/widget_muted" android:textSize="8sp" /></LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal"><TextView android:id="@+id/driver_pos_1" android:layout_width="22dp" android:layout_height="wrap_content" android:textColor="@color/widget_red" android:textSize="10sp" android:textStyle="bold" /><TextView android:id="@+id/driver_name_1" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_text" android:textSize="10sp" /><TextView android:id="@+id/driver_pts_1" android:layout_width="32dp" android:layout_height="wrap_content" android:gravity="end" android:textColor="@color/widget_text" android:textSize="10sp" android:textStyle="bold" /></LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal"><TextView android:id="@+id/driver_pos_2" android:layout_width="22dp" android:layout_height="wrap_content" android:textColor="@color/widget_red" android:textSize="10sp" android:textStyle="bold" /><TextView android:id="@+id/driver_name_2" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_text" android:textSize="10sp" /><TextView android:id="@+id/driver_pts_2" android:layout_width="32dp" android:layout_height="wrap_content" android:gravity="end" android:textColor="@color/widget_text" android:textSize="10sp" android:textStyle="bold" /></LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal"><TextView android:id="@+id/driver_pos_3" android:layout_width="22dp" android:layout_height="wrap_content" android:textColor="@color/widget_red" android:textSize="10sp" android:textStyle="bold" /><TextView android:id="@+id/driver_name_3" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_text" android:textSize="10sp" /><TextView android:id="@+id/driver_pts_3" android:layout_width="32dp" android:layout_height="wrap_content" android:gravity="end" android:textColor="@color/widget_text" android:textSize="10sp" android:textStyle="bold" /></LinearLayout>
+      </LinearLayout>
+      <View android:layout_width="1dp" android:layout_height="match_parent" android:background="@color/widget_line" />
+      <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:layout_marginStart="7dp" android:orientation="vertical">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal"><TextView android:layout_width="22dp" android:layout_height="wrap_content" android:text="POS" android:textColor="@color/widget_muted" android:textSize="8sp" /><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="车队榜" android:textColor="@color/widget_text" android:textSize="10sp" android:textStyle="bold" /><TextView android:layout_width="32dp" android:layout_height="wrap_content" android:gravity="end" android:text="PTS" android:textColor="@color/widget_muted" android:textSize="8sp" /></LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal"><TextView android:id="@+id/team_pos_1" android:layout_width="22dp" android:layout_height="wrap_content" android:textColor="@color/widget_red" android:textSize="10sp" android:textStyle="bold" /><TextView android:id="@+id/team_name_1" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_text" android:textSize="10sp" /><TextView android:id="@+id/team_pts_1" android:layout_width="32dp" android:layout_height="wrap_content" android:gravity="end" android:textColor="@color/widget_text" android:textSize="10sp" android:textStyle="bold" /></LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal"><TextView android:id="@+id/team_pos_2" android:layout_width="22dp" android:layout_height="wrap_content" android:textColor="@color/widget_red" android:textSize="10sp" android:textStyle="bold" /><TextView android:id="@+id/team_name_2" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_text" android:textSize="10sp" /><TextView android:id="@+id/team_pts_2" android:layout_width="32dp" android:layout_height="wrap_content" android:gravity="end" android:textColor="@color/widget_text" android:textSize="10sp" android:textStyle="bold" /></LinearLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal"><TextView android:id="@+id/team_pos_3" android:layout_width="22dp" android:layout_height="wrap_content" android:textColor="@color/widget_red" android:textSize="10sp" android:textStyle="bold" /><TextView android:id="@+id/team_name_3" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:ellipsize="end" android:maxLines="1" android:textColor="@color/widget_text" android:textSize="10sp" /><TextView android:id="@+id/team_pts_3" android:layout_width="32dp" android:layout_height="wrap_content" android:gravity="end" android:textColor="@color/widget_text" android:textSize="10sp" android:textStyle="bold" /></LinearLayout>
+      </LinearLayout>
+    </LinearLayout>
+
+    <TextView android:id="@+id/widget_updated" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="5dp" android:gravity="end" android:textColor="@color/widget_muted" android:textSize="8sp" />
+  </LinearLayout>
+</LinearLayout>

@@ -2,18 +2,14 @@
   "expo": {
     "name": "F1 Gridline",
     "slug": "f1-season-guide",
-    "version": "1.0.1",
+    "scheme": "f1gridline",
+    "version": "1.0.4",
     "orientation": "portrait",
     "platforms": [
       "android",
       "web"
     ],
-    "icon": "./assets/gridline-icon.png",
-    "splash": {
-      "image": "./assets/gridline-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#171A1F"
-    },
+    "icon": "./assets/gridline-icon-b.png",
     "userInterfaceStyle": "automatic",
     "runtimeVersion": {
       "policy": "appVersion"
@@ -23,22 +19,36 @@
     },
     "android": {
       "package": "com.contr0l0.f1gridline",
-      "versionCode": 2,
+      "versionCode": 5,
       "adaptiveIcon": {
         "backgroundColor": "#171A1F",
-        "foregroundImage": "./assets/gridline-android-foreground.png",
-        "monochromeImage": "./assets/gridline-android-monochrome.png"
+        "foregroundImage": "./assets/gridline-android-foreground-b.png",
+        "monochromeImage": "./assets/gridline-android-monochrome-b.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/gridline-favicon.png"
+      "favicon": "./assets/gridline-icon-b.png"
     },
     "extra": {
       "eas": {
         "projectId": "c62c00a9-eec6-427b-b04a-f248404eca66"
       }
     },
-    "owner": "contr0l"
+    "owner": "contr0l",
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/gridline-android-foreground-b.png",
+          "imageWidth": 200,
+          "backgroundColor": "#171A1F",
+          "dark": {
+            "image": "./assets/gridline-android-foreground-b.png",
+            "backgroundColor": "#171A1F"
+          }
+        }
+      ]
+    ]
   }
 }

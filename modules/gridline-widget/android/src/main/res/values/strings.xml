@@ -1,0 +1,5 @@
+<resources>
+  <string name="gridline_widget_description">F1 赛事倒计时和赛季积分榜</string>
+  <string name="widget_driver_photo_description">目标车手照片</string>
+  <string name="widget_team_logo_description">目标车队徽标</string>
+</resources>

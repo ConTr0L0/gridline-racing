@@ -1,0 +1,29 @@
+{
+  "name": "f1-gridline-wechat-mini",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "check:details": "node scripts/check-details.cjs",
+    "check:bundle": "node scripts/check-bundle.cjs",
+    "check:release": "npm run check:details && npm run check:bundle && node scripts/check-release.cjs",
+    "build:weapp": "taro build --type weapp",
+    "dev:weapp": "taro build --type weapp --watch"
+  },
+  "dependencies": {
+    "@tarojs/components": "4.3.0",
+    "@tarojs/plugin-framework-react": "4.3.0",
+    "@tarojs/plugin-platform-weapp": "4.3.0",
+    "@tarojs/react": "4.3.0",
+    "@tarojs/runtime": "4.3.0",
+    "@tarojs/shared": "4.3.0",
+    "@tarojs/taro": "4.3.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@tarojs/cli": "4.3.0",
+    "@tarojs/webpack5-runner": "4.3.0",
+    "babel-preset-taro": "4.3.0",
+    "@babel/preset-react": "^7.24.1"
+  }
+}

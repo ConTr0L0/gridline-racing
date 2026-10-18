@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">F1 Gridline — chicane</title>
+  <desc id="description">A continuous folded racing line with a short red sector embedded in the exit path. Animate the main route first, then reveal the red sector.</desc>
+  <rect id="background" width="1024" height="1024" fill="#171A1F"/>
+  <g id="fold-mark" transform="matrix(0.8803 0.1871 -0.1871 0.8803 157.1 -34.5)">
+    <g id="route-layer" fill="none" stroke="#F5F6F7" stroke-width="123" stroke-linecap="butt" stroke-linejoin="round">
+      <path id="route-line" pathLength="1" d="M156 755H407C473 755 514 704 514 637V389C514 320 560 269 630 269H868"/>
+    </g>
+    <g id="sector-layer" fill="none" stroke="#E31C3D" stroke-width="52" stroke-linecap="round" stroke-linejoin="round">
+      <path id="sector-mark" d="M660 269H800"/>
+    </g>
+  </g>
+</svg>

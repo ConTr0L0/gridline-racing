@@ -44,3 +44,6 @@ yarn-error.*
 
 # Local-only timing bridge; the Expo app does not import it.
 /live-service/
+
+# Separate WeChat mini program is not part of the Expo APK.
+/wechat-mini/

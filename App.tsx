@@ -1,32 +1,37 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFonts } from 'expo-font';
+import * as SecureStore from 'expo-secure-store';
+import * as SplashScreen from 'expo-splash-screen';
 import * as Updates from 'expo-updates';
 import { StatusBar } from 'expo-status-bar';
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   AccessibilityInfo,
-  Alert,
   Animated,
+  BackHandler,
   Easing,
   Image,
   Linking,
   Appearance,
+  Modal,
   Pressable as NativePressable,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
   useWindowDimensions,
   useColorScheme,
   type ImageSourcePropType,
   type PressableProps,
 } from 'react-native';
-import Svg, { Circle, Defs, LinearGradient, Path, Pattern, Polygon, Rect, Stop, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Defs, G, LinearGradient, Path, Pattern, Polygon, Rect, Stop, Text as SvgText } from 'react-native-svg';
 import { SvgCss } from 'react-native-svg/css';
 import { circuitProfiles, driverProfiles, libraryStatsAsOf, teamProfiles, type CircuitProfile, type DriverProfile, type TeamProfile } from './library-data';
 import { teamLogoXml } from './team-logos';
+import { updateGridlineWidgetData } from './modules/gridline-widget';
 
 const C = {
   red: '#E31C3D',
@@ -41,6 +46,10 @@ const C = {
 const MotionPreferenceContext = createContext(false);
 const ThemeRevisionContext = createContext(false);
 const useNativeDriver = Platform.OS !== 'web';
+void SplashScreen.preventAutoHideAsync().catch(() => undefined);
+const AnimatedPath = Animated.createAnimatedComponent(Path);
+const INTRO_ROUTE_LENGTH = 1103;
+const INTRO_RACER_LENGTH = 120;
 
 function useThemeRevision() {
   useContext(ThemeRevisionContext);
@@ -62,6 +71,7 @@ type Team = {
   name: string;
   short: string;
   color: string;
+  position?: number;
   points: number | null;
   base: string;
 };
@@ -73,6 +83,7 @@ type Driver = {
   country: string;
   teamId: string;
   number: number;
+  position?: number;
   points: number | null;
   headshotUrl?: string;
   wins?: number;
@@ -80,7 +91,7 @@ type Driver = {
 };
 
 type Session = { id?: string; name: string; day: string; at: string; endsAt?: string; offset?: string; ended?: boolean };
-type Result = { driverId: string; driverCode?: string; driverName?: string; teamId?: string; position: number; gridPosition?: number; gap: string; fastestLap?: boolean; status: 'finished' | 'dnf' | 'dns' | 'dsq'; points: number | null };
+type Result = { driverId: string; driverCode?: string; driverName?: string; teamId?: string; position: number; gridPosition?: number; gap: string; fastestLap?: boolean; fastestLapChecked?: boolean; status: 'finished' | 'dnf' | 'dns' | 'dsq'; points: number | null };
 type ResultsBySession = Record<string, Result[]>;
 type Race = {
   id: string;
@@ -324,7 +335,7 @@ type OpenF1Driver = {
   team_colour: string;
   headshot_url?: string | null;
 };
-type OpenF1Standing = { driver_number?: number; team_name?: string; points_current: number; position_current: number };
+type OpenF1Standing = { driver_number?: number; team_name?: string; points_current: number | null; position_current: number };
 type OpenF1SessionResult = {
   driver_number: number;
   position: number;
@@ -334,7 +345,8 @@ type OpenF1SessionResult = {
   dns: boolean;
   dsq: boolean;
 };
-type SeasonData = { races: Race[]; drivers: Driver[]; teams: Team[] };
+type OpenF1Lap = { driver_number: number; lap_duration: number | null; is_pit_out_lap?: boolean };
+type SeasonData = { races: Race[]; drivers: Driver[]; teams: Team[]; standingsThrough?: string };
 type SeasonCache = { version: 1 | 2; savedAt: string; data: SeasonData; resultsBySession?: ResultsBySession };
 type SeasonContextValue = SeasonData & {
   resultsBySession: ResultsBySession;
@@ -462,6 +474,12 @@ const offlineLibraryDrivers: Driver[] = activeDriverProfiles.map((profile) => ({
 }));
 const offlineLibraryTeams: Team[] = teamProfiles.map(({ id, name, short, color, points, base }) => ({ id, name, short, color, points, base }));
 
+function rankByPoints<T extends { points: number | null; position?: number }>(rows: T[]): T[] {
+  return rows
+    .sort((a, b) => (b.points ?? -1) - (a.points ?? -1) || (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER))
+    .map((row, index) => ({ ...row, position: index + 1 }));
+}
+
 function withKnown2026Drivers(data: SeasonData): SeasonData {
   const drivers: Driver[] = activeDriverProfiles.map((profile) => {
     const current = data.drivers.find((driver) => driver.code === profile.code || Number(driver.number) === profile.number);
@@ -473,7 +491,7 @@ function withKnown2026Drivers(data: SeasonData): SeasonData {
       country: profile.country,
       teamId: profile.teamId,
       number: profile.number,
-      points: current?.points ?? profile.points,
+      points: current?.points ?? null,
       headshotUrl: f1Portrait(profile.code) ?? current?.headshotUrl,
       wins: profile.season.wins,
       seasonStatus: profile.seasonStatus,
@@ -488,18 +506,18 @@ function withKnown2026Drivers(data: SeasonData): SeasonData {
       name: current?.name ?? profile.name,
       short: profile.short,
       color: current?.color ?? profile.color,
-      points: current?.points ?? profile.points,
+      points: current?.points ?? null,
       base: profile.base,
     } satisfies Team;
   });
   const knownTeamIds = new Set(teamProfiles.map((profile) => profile.id));
   teams.push(...data.teams.filter((team) => !knownTeamIds.has(team.id)));
-  return { ...data, drivers, teams };
+  return { ...data, drivers: rankByPoints(drivers), teams: rankByPoints(teams) };
 }
 const teamNames: Record<string, string> = {
   McLaren: '迈凯伦', Ferrari: '法拉利', 'Red Bull Racing': '红牛', Mercedes: '梅赛德斯',
   'Aston Martin': '阿斯顿·马丁', Williams: '威廉姆斯', Alpine: '阿尔派', Haas: '哈斯',
-  'RB': 'RB车队', 'Racing Bulls': 'RB车队', 'Haas F1 Team': '哈斯', 'Kick Sauber': '索伯', Audi: '奥迪', Cadillac: '凯迪拉克',
+  'RB': '红牛二队', 'Racing Bulls': '红牛二队', 'Haas F1 Team': '哈斯', 'Kick Sauber': '索伯', Audi: '奥迪', Cadillac: '凯迪拉克',
 };
 const countryNames: Record<string, string> = {
   Australia: '澳大利亚', China: '中国', Japan: '日本', Bahrain: '巴林', 'Saudi Arabia': '沙特阿拉伯',
@@ -543,6 +561,7 @@ function describeOpenF1Error(error: unknown) {
   const endpoint = message.match(/^OpenF1 ([^:]+):/)?.[1];
   const statusCode = message.match(/:\s*(\d{3})\b/)?.[1];
   const reason = /timeout/i.test(message) ? '请求超时'
+    : /pending/i.test(message) ? '最新比赛积分尚未就绪'
     : /network/i.test(message) ? '网络请求失败'
       : statusCode ? `接口返回 HTTP ${statusCode}`
         : '接口响应异常';
@@ -550,7 +569,7 @@ function describeOpenF1Error(error: unknown) {
 }
 
 const offsetMinutes = (offset = '+00:00') => {
-  const match = /^([+-])(\d{2}):(\d{2})/.exec(offset);
+  const match = /^([+-]?)(\d{2}):(\d{2})/.exec(offset);
   if (!match) return 0;
   return (match[1] === '-' ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3]));
 };
@@ -607,31 +626,45 @@ async function loadOpenF1Season(): Promise<SeasonData> {
     .map((race, index) => ({ ...race, id: `round-${index + 1}`, round: index + 1 }));
   if (races.length === 0) throw new Error('OpenF1 returned no 2026 race sessions');
 
-  const latestRaceSession = races.flatMap((race) => race.sessions).filter((session) => session.name === '正赛' && Date.parse(session.at) < Date.now()).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
-  if (!latestRaceSession) return { races, drivers: [], teams: [] };
+  const latestScoringSession = sessions.filter((session) => !session.is_cancelled
+    && (session.session_name === 'Race' || session.session_name === 'Sprint')
+    && Date.parse(session.date_end) < Date.now())
+    .sort((a, b) => Date.parse(b.date_start) - Date.parse(a.date_start))[0];
+  if (!latestScoringSession) throw new Error('OpenF1 championship: pending');
+  const sessionKey = String(latestScoringSession.session_key);
 
   const [roster, driverRows, teamRows] = await Promise.all([
-    openF1<OpenF1Driver[]>('drivers', { session_key: latestRaceSession.id! }).catch(() => []),
-    openF1<OpenF1Standing[]>('championship_drivers', { session_key: latestRaceSession.id! }).catch(() => []),
-    openF1<OpenF1Standing[]>('championship_teams', { session_key: latestRaceSession.id! }).catch(() => []),
+    openF1<OpenF1Driver[]>('drivers', { session_key: sessionKey }),
+    openF1<OpenF1Standing[]>('championship_drivers', { session_key: sessionKey }),
+    openF1<OpenF1Standing[]>('championship_teams', { session_key: sessionKey }),
   ]);
+  if (!roster.length || !driverRows.length || !teamRows.length
+    || [...driverRows, ...teamRows].some((row) => typeof row.points_current !== 'number' || !Number.isFinite(row.points_current) || row.points_current < 0)
+    || roster.some((driver) => !driverRows.some((row) => row.driver_number === driver.driver_number)
+      || !teamRows.some((row) => row.team_name === driver.team_name))) {
+    throw new Error('OpenF1 championship: pending');
+  }
   const driverPoints = new Map(driverRows.map((row) => [row.driver_number, row.points_current]));
+  const driverPositions = new Map(driverRows.map((row) => [row.driver_number, row.position_current]));
   const teamPoints = new Map(teamRows.map((row) => [row.team_name ?? '', row.points_current]));
+  const teamPositions = new Map(teamRows.map((row) => [row.team_name ?? '', row.position_current]));
   const colorByTeam = new Map(roster.map((driver) => [driver.team_name, `#${driver.team_colour.replace(/^#/, '')}`]));
   const teamList: Team[] = [...new Set(roster.map((driver) => driver.team_name))].map((name) => {
     const profile = teamProfiles.find((item) => item.id === teamId(name));
     return {
       id: teamId(name), name: teamNames[name] ?? profile?.name ?? name, short: profile?.short ?? name.slice(0, 3).toUpperCase(),
-      color: colorByTeam.get(name) ?? profile?.color ?? C.teal, points: teamPoints.get(name) ?? null, base: profile?.base ?? '资料待核实',
+      color: colorByTeam.get(name) ?? profile?.color ?? C.teal, position: teamPositions.get(name), points: teamPoints.get(name) ?? null, base: profile?.base ?? '资料待核实',
     };
-  }).sort((a, b) => (b.points ?? -1) - (a.points ?? -1));
+  });
   const driverList: Driver[] = roster.map((driver) => ({
     id: knownDriverIds[driver.name_acronym] ?? `driver-${driver.driver_number}`,
     name: driverNames[driver.name_acronym] ?? driver.full_name, code: driver.name_acronym,
-    country: driverCountryNames[driver.country_code] ?? driver.country_code, teamId: teamId(driver.team_name), number: driver.driver_number,
+    country: driverCountryNames[driver.country_code] ?? driver.country_code, teamId: teamId(driver.team_name), number: driver.driver_number, position: driverPositions.get(driver.driver_number),
     points: driverPoints.get(driver.driver_number) ?? null, headshotUrl: driver.headshot_url ?? undefined,
-  })).sort((a, b) => (b.points ?? -1) - (a.points ?? -1));
-  return { races, drivers: driverList, teams: teamList };
+  }));
+  const meeting = meetings.find((item) => item.meeting_key === latestScoringSession.meeting_key);
+  const standingsThrough = `${meeting ? raceNames[meeting.meeting_name] ?? meeting.meeting_name : ''} ${sessionLabels[latestScoringSession.session_name]}`.trim();
+  return { races, drivers: rankByPoints(driverList), teams: rankByPoints(teamList), standingsThrough };
 }
 
 function lastFiniteNumber(value: unknown): number | null {
@@ -653,14 +686,24 @@ function formatOpenF1Gap(value: OpenF1SessionResult['gap_to_leader'], leaderLabe
 
 async function loadOpenF1Results(sessionKey: string, driverList: Driver[], sessionName: string): Promise<Result[]> {
   const rows = await openF1<OpenF1SessionResult[]>('session_result', { session_key: sessionKey });
-  const eventDrivers = rows.some((row) => row.driver_number === 22 || row.driver_number === 30)
+  const driverByNumber = new Map(driverList.map((driver) => [Number(driver.number), driver]));
+  const eventDrivers = rows.some((row) => !driverByNumber.has(Number(row.driver_number)))
     ? await openF1<OpenF1Driver[]>('drivers', { session_key: sessionKey }).catch(() => [])
     : [];
+  const lapRows = sessionName === '正赛'
+    ? await openF1<OpenF1Lap[]>('laps', { session_key: sessionKey }).catch(() => null)
+    : null;
+  const fastestLap = (lapRows ?? []).reduce<{ driverNumber: number; duration: number } | null>((best, lap) => {
+    const duration = lastFiniteNumber(lap.lap_duration);
+    return lap.is_pit_out_lap === true || duration === null || (best && duration >= best.duration)
+      ? best
+      : { driverNumber: lap.driver_number, duration };
+  }, null);
   const isQualifying = sessionName.includes('排位');
   const poleRow = rows.find((row) => Number(row.position) === 1);
   const poleTime = isQualifying ? lastFiniteNumber(poleRow?.duration) : null;
   return rows.map((row): Result => {
-    const driver = driverList.find((item) => Number(item.number) === Number(row.driver_number));
+    const driver = driverByNumber.get(Number(row.driver_number));
     const eventDriver = eventDrivers.find((item) => Number(item.driver_number) === Number(row.driver_number));
     const status: Result['status'] = row.dsq ? 'dsq' : row.dns ? 'dns' : row.dnf ? 'dnf' : 'finished';
     const position = Number(row.position);
@@ -674,8 +717,12 @@ async function loadOpenF1Results(sessionKey: string, driverList: Driver[], sessi
       driverId: driver?.id ?? `driver-${row.driver_number}`, position: Number.isFinite(position) && position > 0 ? position : 99,
       driverCode: eventDriver?.name_acronym ?? driver?.code,
       driverName: driverNames[eventDriver?.name_acronym ?? ''] ?? eventDriver?.full_name ?? driver?.name,
-      teamId: eventDriver ? teamId(eventDriver.team_name) : undefined,
+      teamId: eventDriver ? teamId(eventDriver.team_name) : driver?.teamId,
       gap, status, points: null,
+      ...(sessionName === '正赛' ? {
+        fastestLapChecked: lapRows !== null,
+        ...(fastestLap ? { fastestLap: row.driver_number === fastestLap.driverNumber } : {}),
+      } : {}),
     };
   }).sort((a, b) => a.position - b.position);
 }
@@ -692,8 +739,9 @@ async function readOpenF1ResultsCache(sessionKey: string): Promise<Result[] | nu
   }
 }
 
-const needsEventTeamRefresh = (rows?: Result[]) => Boolean(rows?.some((result) =>
-  (result.driverId === 'driver-30' || result.driverId === 'driver-22' || result.driverCode === 'LAW' || result.driverCode === 'TSU') && !result.teamId));
+const needsSessionRefresh = (rows: Result[] | undefined, sessionName: string) => Boolean(rows?.some((result) =>
+  (!result.teamId && (sessionName === '正赛' || sessionName.includes('排位') || result.driverId === 'driver-30' || result.driverId === 'driver-22' || result.driverCode === 'LAW' || result.driverCode === 'TSU'))
+  || (sessionName === '正赛' && result.fastestLapChecked !== true)));
 
 const navItems: { id: Section; label: string; icon: string }[] = [
   { id: 'home', label: '首页', icon: 'M3 10.5 12 3l9 7.5M5.5 9v11h13V9M9 20v-6h6v6' },
@@ -758,74 +806,366 @@ function Pressable({ style, onPressIn, onPressOut, disabled, ...props }: Pressab
   );
 }
 
-function MotionPanel({ motionKey, children }: { motionKey: string; children: ReactNode }) {
+function MotionPanel({ motionKey, children, animateOnMount = false, delay = 0 }: { motionKey: string; children: ReactNode; animateOnMount?: boolean; delay?: number }) {
   const reduceMotion = useContext(MotionPreferenceContext);
-  const progress = useRef(new Animated.Value(1)).current;
-  const previousKey = useRef(motionKey);
+  const progress = useRef(new Animated.Value(animateOnMount ? 0 : 1)).current;
+  const previousKey = useRef<string | null>(animateOnMount ? null : motionKey);
   useLayoutEffect(() => {
     if (previousKey.current === motionKey) return;
     previousKey.current = motionKey;
     progress.stopAnimation();
-    progress.setValue(reduceMotion ? 0.62 : 0.45);
-    const animation = Animated.timing(progress, { toValue: 1, duration: reduceMotion ? 140 : 220, easing: Easing.out(Easing.cubic), useNativeDriver });
+    progress.setValue(reduceMotion ? 0.62 : animateOnMount ? 0 : 0.45);
+    const animation = Animated.sequence([
+      Animated.delay(reduceMotion ? 0 : delay),
+      Animated.timing(progress, { toValue: 1, duration: reduceMotion ? 140 : animateOnMount ? 600 : 220, easing: Easing.out(Easing.cubic), useNativeDriver }),
+    ]);
     animation.start();
     return () => animation.stop();
-  }, [motionKey, progress, reduceMotion]);
-  const panelOffset = progress.interpolate({ inputRange: [0.45, 1], outputRange: [6, 0], extrapolate: 'clamp' });
+  }, [motionKey, progress, reduceMotion, animateOnMount, delay]);
+  const panelOffset = progress.interpolate({ inputRange: animateOnMount ? [0, 1] : [0.45, 1], outputRange: animateOnMount ? [22, 0] : [6, 0], extrapolate: 'clamp' });
   return <Animated.View style={{ opacity: progress, transform: reduceMotion ? [] : [{ translateY: panelOffset }] }}>{children}</Animated.View>;
 }
 
 const F1_LIVE_TIMING_URL = 'https://www.formula1.com/en/timing/f1-live-lite?os=http';
 
-function LiveTimingPage() {
+type LiveTimingDriver = {
+  number: string;
+  code: string;
+  team: string;
+  teamColour: string;
+  position: number | null;
+  gap: string;
+  lastLap: string;
+  bestLap: string;
+};
+type LiveTimingSnapshot = {
+  meeting: string;
+  session: string;
+  sessionStatus: string;
+  trackStatus: string;
+  lap: number | null;
+  totalLaps: number | null;
+  updatedAt: string | null;
+  upstreamConnected: boolean;
+  drivers: LiveTimingDriver[];
+};
+type LiveBridgeStatus = 'unconfigured' | 'needs-key' | 'connecting' | 'connected' | 'offline' | 'unauthorized';
+
+const LIVE_TIMING_BRIDGE_URL = process.env.EXPO_PUBLIC_F1_TIMING_URL?.trim() ?? '';
+const LIVE_TIMING_BRIDGE_URL_STORAGE = 'f1-live-bridge-url';
+
+function isLiveTimingSnapshot(value: unknown): value is LiveTimingSnapshot {
+  if (!value || typeof value !== 'object') return false;
+  const snapshot = value as Partial<LiveTimingSnapshot>;
+  return typeof snapshot.meeting === 'string'
+    && typeof snapshot.session === 'string'
+    && typeof snapshot.sessionStatus === 'string'
+    && typeof snapshot.trackStatus === 'string'
+    && (snapshot.lap === null || typeof snapshot.lap === 'number')
+    && (snapshot.totalLaps === null || typeof snapshot.totalLaps === 'number')
+    && (snapshot.updatedAt === null || typeof snapshot.updatedAt === 'string')
+    && typeof snapshot.upstreamConnected === 'boolean'
+    && Array.isArray(snapshot.drivers)
+    && snapshot.drivers.length <= 30
+    && snapshot.drivers.every((driver) => {
+      if (!driver || typeof driver !== 'object') return false;
+      const row = driver as Partial<LiveTimingDriver>;
+      return typeof row.number === 'string'
+        && typeof row.code === 'string'
+        && typeof row.team === 'string'
+        && typeof row.teamColour === 'string'
+        && (row.position === null || typeof row.position === 'number')
+        && typeof row.gap === 'string'
+        && typeof row.lastLap === 'string'
+        && typeof row.bestLap === 'string';
+    });
+}
+
+function LiveTimingPage({ active }: { active: boolean }) {
   useThemeRevision();
+  const [snapshot, setSnapshot] = useState<LiveTimingSnapshot | null>(null);
+  const [bridgeStatus, setBridgeStatus] = useState<LiveBridgeStatus>(LIVE_TIMING_BRIDGE_URL ? 'needs-key' : 'unconfigured');
+  const [bridgeUrl, setBridgeUrl] = useState(LIVE_TIMING_BRIDGE_URL);
+  const [bridgeUrlInput, setBridgeUrlInput] = useState(LIVE_TIMING_BRIDGE_URL);
+  const [editingBridgeUrl, setEditingBridgeUrl] = useState(!LIVE_TIMING_BRIDGE_URL);
+  const [accessKeyInput, setAccessKeyInput] = useState('');
+  const [connectionKey, setConnectionKey] = useState<string | null>(null);
+  const [keyRestored, setKeyRestored] = useState(false);
+  const [keyPersistenceMessage, setKeyPersistenceMessage] = useState('');
+  const [reconnectKey, setReconnectKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      let url = LIVE_TIMING_BRIDGE_URL;
+      try { url = await AsyncStorage.getItem(LIVE_TIMING_BRIDGE_URL_STORAGE) || url; } catch { /* Use the packaged default. */ }
+      let storedKey: string | null = null;
+      if (url && Platform.OS !== 'web') {
+        try { storedKey = await SecureStore.getItemAsync(`f1-live-bridge-access-key:${url}`); } catch { /* Ask for the key again. */ }
+      }
+      if (cancelled) return;
+      setBridgeUrl(url);
+      setBridgeUrlInput(url);
+      setEditingBridgeUrl(!url);
+      setConnectionKey(storedKey);
+      setKeyRestored(true);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!active) return;
+    if (!bridgeUrl) {
+      setBridgeStatus('unconfigured');
+      setSnapshot(null);
+      return;
+    }
+    if (!keyRestored) return;
+    if (connectionKey === null) {
+      setBridgeStatus((current) => current === 'unauthorized' ? current : 'needs-key');
+      setSnapshot(null);
+      return;
+    }
+
+    let stopped = false;
+    let socket: WebSocket | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    setSnapshot(null);
+
+    const scheduleReconnect = () => {
+      if (!stopped) retryTimer = setTimeout(connect, 3000);
+    };
+    function connect() {
+      if (stopped) return;
+      setBridgeStatus('connecting');
+      try {
+        socket = new WebSocket(
+          bridgeUrl,
+          connectionKey ? ['f1-live', connectionKey] : ['f1-live'],
+        );
+      } catch {
+        setBridgeStatus('offline');
+        scheduleReconnect();
+        return;
+      }
+      const currentSocket = socket;
+      currentSocket.onopen = () => { if (!stopped) setBridgeStatus('connected'); };
+      currentSocket.onmessage = (event) => {
+        try {
+          const next: unknown = JSON.parse(String(event.data));
+          if (isLiveTimingSnapshot(next)) setSnapshot(next);
+        } catch {
+          // Ignore malformed bridge frames and keep the last valid snapshot.
+        }
+      };
+      currentSocket.onerror = () => currentSocket.close();
+      currentSocket.onclose = (event) => {
+        if (stopped) return;
+        setSnapshot(null);
+        if (event.code === 1008) {
+          setBridgeStatus('unauthorized');
+          setConnectionKey(null);
+          if (Platform.OS !== 'web') void SecureStore.deleteItemAsync(`f1-live-bridge-access-key:${bridgeUrl}`).catch(() => undefined);
+          return;
+        }
+        setBridgeStatus('offline');
+        scheduleReconnect();
+      };
+    }
+
+    connect();
+    return () => {
+      stopped = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      socket?.close();
+    };
+  }, [active, bridgeUrl, connectionKey, keyRestored, reconnectKey]);
+
+  const hasLiveFeed = bridgeStatus === 'connected' && snapshot?.upstreamConnected === true;
+  const hasRecentFeed = Boolean(
+    hasLiveFeed
+      && snapshot?.updatedAt
+      && Date.now() - Date.parse(snapshot.updatedAt) < 30_000,
+  );
+  const liveSnapshot = hasRecentFeed ? snapshot : null;
+  const connectionLabel = !bridgeUrl
+    ? '未配置桥接'
+    : !keyRestored ? '读取本机密钥'
+    : bridgeStatus === 'needs-key' ? '输入访问密钥'
+      : bridgeStatus === 'unauthorized' ? '密钥无效'
+        : bridgeStatus === 'connecting' ? '连接中'
+          : bridgeStatus === 'offline' ? '自动重连'
+            : hasRecentFeed ? '实时数据' : hasLiveFeed ? '桥接在线' : '等待比赛';
+  const connectionColor = hasLiveFeed ? C.teal : bridgeStatus === 'connecting' ? '#D39D29' : C.red;
+  const emptyMessage = !bridgeUrl
+    ? '请填写运行 FastF1 桥接服务的电脑地址和访问密钥。'
+    : !keyRestored ? '正在读取本机保存的桥接密钥…'
+    : bridgeStatus === 'needs-key' ? '请填写桥接访问密钥后连接；若服务未配置密钥，可留空。'
+      : bridgeStatus === 'unauthorized' ? '访问密钥无效，请修改后重试。'
+        : bridgeStatus === 'connecting' ? '正在连接实时数据桥…'
+          : bridgeStatus === 'offline' ? '连接中断，正在自动重试…'
+            : hasRecentFeed ? '当前没有可显示的车手数据。'
+              : '桥接已连接，等待比赛期间的实时数据。';
   const openOfficialPage = () => {
     void Linking.openURL(F1_LIVE_TIMING_URL).catch((error) => console.warn('F1 official page could not be opened:', error));
+  };
+  const connectWithAccessKey = async () => {
+    const url = (editingBridgeUrl || !bridgeUrl ? bridgeUrlInput : bridgeUrl).trim();
+    try {
+      const parsed = new URL(url);
+      if (!['ws:', 'wss:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.hash) throw new Error();
+    } catch {
+      setKeyPersistenceMessage('请输入有效的 ws:// 或 wss:// 桥接地址。');
+      return;
+    }
+    const key = accessKeyInput.trim();
+    setAccessKeyInput('');
+    const persistenceMessages: string[] = [];
+    try { await AsyncStorage.setItem(LIVE_TIMING_BRIDGE_URL_STORAGE, url); }
+    catch { persistenceMessages.push('桥接地址本次可用，但无法保存在本机。'); }
+    if (Platform.OS !== 'web') {
+      try {
+        await SecureStore.setItemAsync(`f1-live-bridge-access-key:${url}`, key);
+      } catch {
+        persistenceMessages.push('本机安全存储不可用，下次打开时需要重新输入密钥。');
+      }
+    } else {
+      persistenceMessages.push('网页端不会保存密钥，重新加载后需要再次输入。');
+    }
+    setBridgeUrl(url);
+    setBridgeUrlInput(url);
+    setEditingBridgeUrl(false);
+    setKeyPersistenceMessage(persistenceMessages.join(' '));
+    setConnectionKey(key);
+    setKeyRestored(true);
+  };
+  const changeAccessKey = () => {
+    if (Platform.OS !== 'web') void SecureStore.deleteItemAsync(`f1-live-bridge-access-key:${bridgeUrl}`).catch(() => undefined);
+    setSnapshot(null);
+    setConnectionKey(null);
+    setAccessKeyInput('');
+    setKeyPersistenceMessage('');
+  };
+  const cancelBridgeUrlEdit = () => {
+    setBridgeUrlInput(bridgeUrl);
+    setEditingBridgeUrl(false);
+    setAccessKeyInput('');
   };
 
   return (
     <ScrollView style={styles.livePage} contentContainerStyle={styles.liveContent} showsVerticalScrollIndicator={false}>
-      <ScreenHeader eyebrow="FORMULA 1 · LIVE TIMING" title="官方实时" right="2026" />
+      <ScreenHeader eyebrow="FORMULA 1 · LIVE TIMING" title="实时计时" right="2026" />
       <View style={styles.liveHero}>
         <View style={styles.liveHeroTop}>
-          <Text style={styles.liveHeroKicker}>F1.COM / LIVE</Text>
-          <View style={styles.liveOfficialTag}><View style={styles.liveOfficialDot} /><Text style={styles.liveOfficialTagText}>官方计时</Text></View>
+          <Text style={styles.liveHeroKicker}>FASTF1 · LIVE BRIDGE</Text>
+          <View style={styles.liveConnectionTag}><View style={[styles.liveOfficialDot, { backgroundColor: connectionColor }]} /><Text style={styles.liveConnectionTagText}>{connectionLabel}</Text></View>
         </View>
         <Text style={styles.liveHeroTitle}>赛道上的每一秒</Text>
-        <Text style={styles.liveHeroCopy}>前往 F1 官方实时计时，查看比赛期间发布的现场数据。</Text>
+        <Text style={styles.liveHeroCopy}>在应用内查看实时车手排序、圈速和赛道状态。</Text>
         <Pressable accessibilityRole="button" onPress={openOfficialPage} style={styles.liveOpenButton}>
-          <Text style={styles.liveOpenButtonText}>打开官方实时计时</Text>
+          <Text style={styles.liveOpenButtonText}>打开 F1 官方计时</Text>
           <Text style={styles.liveOpenArrow}>↗</Text>
         </Pressable>
-        <Text style={styles.liveHeroFootnote}>官网将在浏览器中打开，登录状态由官网管理</Text>
+        <Text style={styles.liveHeroFootnote}>桥接暂不可用时，可继续查看 F1 官方 Live Lite</Text>
       </View>
 
+      {bridgeUrl && !editingBridgeUrl ? (
+        <Pressable accessibilityRole="button" onPress={() => { setBridgeUrlInput(bridgeUrl); setEditingBridgeUrl(true); }} style={[styles.liveReconnectButton, { alignSelf: 'flex-end', marginBottom: 10 }]}>
+          <Text style={styles.liveReconnectText}>修改桥接地址</Text>
+        </Pressable>
+      ) : (
+        <View style={styles.liveAccessRow}>
+          <TextInput
+            accessibilityLabel="实时桥接地址"
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            onChangeText={setBridgeUrlInput}
+            placeholder="ws://电脑局域网IP:8765 或 wss://..."
+            placeholderTextColor={C.muted}
+            style={styles.liveAccessInput}
+            value={bridgeUrlInput}
+          />
+          {bridgeUrl ? <Pressable accessibilityRole="button" onPress={cancelBridgeUrlEdit} style={styles.liveReconnectButton}><Text style={styles.liveReconnectText}>取消</Text></Pressable> : null}
+        </View>
+      )}
+      {(!bridgeUrl || editingBridgeUrl) ? <Text style={styles.liveKeyPersistenceMessage}>密钥会发送到填写的桥接地址，请确认它属于你运行的桥接服务。</Text> : null}
+      {(!bridgeUrl || editingBridgeUrl || (keyRestored && connectionKey === null)) ? (
+        <View style={styles.liveAccessRow}>
+          <TextInput
+            accessibilityLabel="桥接访问密钥"
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setAccessKeyInput}
+            placeholder="桥接访问密钥（未设置可留空）"
+            placeholderTextColor={C.muted}
+            secureTextEntry
+            style={styles.liveAccessInput}
+            value={accessKeyInput}
+          />
+          <Pressable accessibilityRole="button" accessibilityState={{ disabled: !keyRestored }} disabled={!keyRestored} onPress={() => { void connectWithAccessKey(); }} style={[styles.liveAccessConnectButton, !keyRestored && { opacity: 0.5 }]}>
+            <Text style={styles.liveAccessConnectText}>连接</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {keyPersistenceMessage ? <Text style={styles.liveKeyPersistenceMessage}>{keyPersistenceMessage}</Text> : null}
+
       <View style={styles.liveSectionHeading}>
-        <View><Text style={styles.liveSectionTitle}>实时计时中心</Text><Text style={styles.liveSectionSubtitle}>FORMULA 1 · TIMING</Text></View>
-        <Glyph path="M4 16.5 8.5 12l3 3L20 6.5M14.5 6.5H20v5.5" color={C.red} size={20} />
+        <View><Text style={styles.liveSectionTitle}>实时车手排序</Text><Text style={styles.liveSectionSubtitle}>FASTF1 · LIVE TIMING</Text></View>
+        <View style={styles.liveSectionActions}>
+          {bridgeUrl && connectionKey !== null ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="更换桥接访问密钥" onPress={changeAccessKey} style={styles.liveReconnectButton}>
+              <Text style={styles.liveReconnectText}>换密钥</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="重新连接实时数据"
+            accessibilityState={{ disabled: !bridgeUrl || connectionKey === null }}
+            disabled={!bridgeUrl || connectionKey === null}
+            onPress={() => setReconnectKey((value) => value + 1)}
+            style={[styles.liveReconnectButton, (!bridgeUrl || connectionKey === null) && { opacity: 0.45 }]}
+          >
+            <Text style={styles.liveReconnectText}>重连</Text>
+          </Pressable>
+        </View>
       </View>
-      <View style={styles.liveFeatureCard}>
-        <Pressable accessibilityRole="button" accessibilityLabel="实时车手排序" accessibilityHint="打开 F1 官方实时计时查看数据" onPress={openOfficialPage} style={({ pressed }) => [styles.liveFeatureRow, pressed && styles.liveFeatureRowPressed]}>
-          <View style={styles.liveFeatureIcon}><Glyph path="M4 18V6m0 12h16M8 15v-4m4 4V7m4 8v-6m4 6V4" color={C.red} size={18} /></View>
-          <View style={styles.liveFeatureCopy}><Text style={styles.liveFeatureTitle}>实时车手排序</Text><Text style={styles.liveFeatureDetail}>跟随比赛进程查看名次变化</Text></View>
-          <Text style={styles.liveFeatureAction}>↗</Text>
-        </Pressable>
-        <View style={styles.liveFeatureDivider} />
-        <Pressable accessibilityRole="button" accessibilityLabel="圈速与分段" accessibilityHint="打开 F1 官方实时计时查看数据" onPress={openOfficialPage} style={({ pressed }) => [styles.liveFeatureRow, pressed && styles.liveFeatureRowPressed]}>
-          <View style={styles.liveFeatureIcon}><Glyph path="M4 7h16M4 12h10M4 17h7M18 10l2 2-2 2" color={C.teal} size={18} /></View>
-          <View style={styles.liveFeatureCopy}><Text style={styles.liveFeatureTitle}>圈速与分段</Text><Text style={styles.liveFeatureDetail}>查看圈速、分段成绩与赛道进度</Text></View>
-          <Text style={styles.liveFeatureAction}>↗</Text>
-        </Pressable>
-        <View style={styles.liveFeatureDivider} />
-        <Pressable accessibilityRole="button" accessibilityLabel="现场信息" accessibilityHint="打开 F1 官方实时计时查看数据" onPress={openOfficialPage} style={({ pressed }) => [styles.liveFeatureRow, pressed && styles.liveFeatureRowPressed]}>
-          <View style={styles.liveFeatureIcon}><Glyph path="M4 7h16v10H4zM8 11h.01M11 11h.01M14 11h.01M8 14h.01M11 14h.01" color="#4D6477" size={18} /></View>
-          <View style={styles.liveFeatureCopy}><Text style={styles.liveFeatureTitle}>现场信息</Text><Text style={styles.liveFeatureDetail}>以 F1 官网当前提供的内容为准</Text></View>
-          <Text style={styles.liveFeatureAction}>↗</Text>
-        </Pressable>
+      <View style={styles.liveTimingCard}>
+        <View style={styles.liveTimingSummary}>
+          <View style={styles.liveTimingSummaryCopy}>
+            <Text style={styles.liveTimingMeeting} numberOfLines={1}>{liveSnapshot?.meeting || '等待赛事数据'}</Text>
+            <Text style={styles.liveTimingSession} numberOfLines={1}>{[liveSnapshot?.session, liveSnapshot?.sessionStatus].filter(Boolean).join(' · ') || 'F1 LIVE TIMING'}</Text>
+          </View>
+          <Text style={styles.liveTimingLap}>圈 {liveSnapshot?.lap ?? '—'} / {liveSnapshot?.totalLaps ?? '—'}</Text>
+        </View>
+        <Text style={styles.liveTrackStatus} numberOfLines={1}>{liveSnapshot?.trackStatus || '赛道状态等待数据'}</Text>
+        <View style={styles.liveDriverHeader}>
+          <Text style={styles.liveDriverHeaderPosition}>POS</Text>
+          <Text style={styles.liveDriverHeaderIdentity}>DRIVER</Text>
+          <Text style={styles.liveDriverHeaderStats}>GAP / LAST / BEST</Text>
+        </View>
+        {liveSnapshot && liveSnapshot.drivers.length > 0 ? liveSnapshot.drivers.map((driver) => {
+          const teamColour = /^#[0-9a-f]{6}$/i.test(driver.teamColour) ? driver.teamColour : C.line;
+          return (
+            <View key={driver.number} style={styles.liveDriverRow}>
+              <Text style={styles.liveDriverPosition}>{driver.position ?? '—'}</Text>
+              <View style={[styles.liveDriverMarker, { backgroundColor: teamColour }]} />
+              <View style={styles.liveDriverIdentity}>
+                <Text style={styles.liveDriverCode}>{driver.code || '#' + driver.number}</Text>
+                <Text style={styles.liveDriverTeam} numberOfLines={1}>{driver.team || '—'}</Text>
+              </View>
+              <View style={styles.liveDriverStats}>
+                <Text style={styles.liveDriverGap} numberOfLines={1}>{driver.gap || '—'}</Text>
+                <Text style={styles.liveDriverLap} numberOfLines={1}>LAST {driver.lastLap || '—'}</Text>
+                <Text style={styles.liveDriverLap} numberOfLines={1}>BEST {driver.bestLap || '—'}</Text>
+              </View>
+            </View>
+          );
+        }) : <Text style={styles.liveEmptyState}>{emptyMessage}</Text>}
       </View>
       <View style={styles.liveNotice}>
         <View style={styles.liveNoticeMark}><Text style={styles.liveNoticeMarkText}>i</Text></View>
-        <Text style={styles.liveNoticeText}>实时内容由 F1 官网提供；赛事开放时间、网络连接及账号要求以官网显示为准。</Text>
+        <Text style={styles.liveNoticeText}>数据通过项目内 FastF1 WebSocket 桥接服务接收；赛事期间无数据或连接失败时，可打开上方官方入口。</Text>
       </View>
     </ScrollView>
   );
@@ -905,8 +1245,8 @@ function ProfileInfoRow({ label, value }: { label: string; value: string }) {
   return <View style={styles.profileInfoRow}><Text style={styles.profileInfoLabel}>{label}</Text><Text style={styles.profileInfoValue}>{value}</Text></View>;
 }
 
-function SourceNote({ source, asOf }: { source: string; asOf?: string }) {
-  return <Pressable accessibilityRole="link" onPress={() => { void Linking.openURL(source); }} style={styles.profileSource}><Text style={styles.profileSourceText}>资料来源：Formula1.com{asOf ? ` · 统计截至 ${asOf}` : ''} ↗</Text></Pressable>;
+function SourceNote({ source, asOf, label = 'Formula1.com' }: { source: string; asOf?: string; label?: string }) {
+  return <Pressable accessibilityRole="link" onPress={() => { void Linking.openURL(source); }} style={styles.profileSource}><Text style={styles.profileSourceText}>资料来源：{label}{asOf ? ` · 统计截至 ${asOf}` : ''} ↗</Text></Pressable>;
 }
 
 function ScreenHeader({ eyebrow, title, right }: { eyebrow: string; title: string; right?: string }) {
@@ -922,13 +1262,16 @@ function ScreenHeader({ eyebrow, title, right }: { eyebrow: string; title: strin
 }
 
 function DemoNotice() {
-  const { status, reload, syncedAt, hasSeasonData, dataSource, errorHint } = useSeason();
+  const { status, reload, syncedAt, hasSeasonData, dataSource, errorHint, standingsThrough } = useSeason();
   const synced = formatSyncTime(syncedAt);
   const lastDataLabel = hasSeasonData
     ? `显示${dataSource === 'cache' ? '缓存' : '上次同步'}${synced ? `于 ${synced}` : ''}的数据`
     : `显示本地赛历与积分快照（积分截至 ${libraryStatsAsOf}；分场时间需联网）`;
+  const sourceLabel = dataSource === 'calendar'
+    ? `本地积分快照 · 截至 ${libraryStatsAsOf}`
+    : `${standingsThrough ? `积分截至 ${standingsThrough} · ` : ''}OpenF1 · CC BY-NC-SA 4.0`;
   const label = status === 'live'
-    ? `OpenF1 · 已同步${synced ? ` ${synced}` : ''} · CC BY-NC-SA 4.0 · 非官方 · 点此刷新`
+    ? `OpenF1 · 已同步${synced ? ` ${synced}` : ''}${standingsThrough ? ` · 积分截至 ${standingsThrough}` : ''} · CC BY-NC-SA 4.0 · 非官方 · 点此刷新`
     : status === 'loading'
       ? `正在连接 OpenF1 · ${lastDataLabel}`
       : status === 'restricted'
@@ -936,13 +1279,14 @@ function DemoNotice() {
         : `OpenF1 暂不可用 · ${errorHint ?? '连接失败'} · ${lastDataLabel} · 点此重试`;
   const shortLabel = status === 'live'
     ? `已同步${synced ? ` ${synced.slice(-5)}` : ''}`
-    : status === 'loading' ? '同步中…' : status === 'restricted' ? '访问受限' : '暂不可用';
+    : status === 'loading' ? '同步中…' : status === 'restricted' ? '访问受限'
+      : errorHint?.includes('积分尚未就绪') ? '积分待更新' : '同步未完成';
   return <MotionPanel motionKey={status}><View style={styles.demoNotice}>
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityHint={status === 'loading' ? undefined : status === 'live' ? '点按刷新数据' : '点按重试连接'} disabled={status === 'loading'} onPress={reload} style={styles.demoNoticeButton}>
       <View style={[styles.demoDot, status === 'live' ? styles.liveDot : (status === 'offline' || status === 'restricted') && styles.errorDot]} />
       <Text numberOfLines={1} style={styles.demoNoticeText}>{shortLabel}</Text>
     </Pressable>
-    <Text numberOfLines={1} style={styles.demoNoticeCredit}>OpenF1 · CC BY-NC-SA 4.0</Text>
+    <Text numberOfLines={1} style={styles.demoNoticeCredit}>{sourceLabel}</Text>
   </View></MotionPanel>;
 }
 
@@ -1236,60 +1580,105 @@ function SchedulePage({ filter, onFilterChange, onOpenRace }: { filter: Schedule
 function SettingsPage({ themeMode, onThemeModeChange }: { themeMode: ThemeMode; onThemeModeChange: (mode: ThemeMode) => void }) {
   useThemeRevision();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateNotice, setUpdateNotice] = useState<{ title: string; message: string; tone: 'success' | 'error' | 'info'; onConfirm?: () => void } | null>(null);
   const themeDescription = themeMode === 'system'
     ? '跟随设备外观，并在系统主题变化时自动切换。'
     : themeMode === 'light' ? '日间模式已启用。' : '夜间模式已启用。';
   const checkForUpdate = async () => {
     if (Platform.OS !== 'android' || __DEV__ || !Updates.isEnabled) {
-      Alert.alert('当前环境暂不支持更新', '请在已安装的 Android 发布版中检查更新；Expo Go 和开发版不支持。');
+      setUpdateNotice({ title: '当前环境暂不支持更新', message: '请在已安装的 Android 发布版中检查更新；Expo Go 和开发版不支持。', tone: 'info' });
       return;
     }
     setCheckingUpdate(true);
     try {
       const update = await Updates.checkForUpdateAsync();
       if (!update.isAvailable) {
-        Alert.alert('已是最新版本', '当前没有可用更新。');
+        setUpdateNotice({ title: '已是最新版本', message: '当前没有可用更新。', tone: 'success' });
         return;
       }
       await Updates.fetchUpdateAsync();
-      Alert.alert('更新已下载', '立即重启应用以应用更新？', [
-        { text: '稍后', style: 'cancel' },
-        { text: '立即重启', onPress: () => { void Updates.reloadAsync().catch((error) => Alert.alert('重启失败', String(error))); } },
-      ]);
+      setUpdateNotice({
+        title: '更新已就绪',
+        message: '新版本已下载，重启应用即可完成更新。',
+        tone: 'success',
+        onConfirm: () => { void Updates.reloadAsync().catch((error) => setUpdateNotice({ title: '重启失败', message: error instanceof Error ? error.message : String(error), tone: 'error' })); },
+      });
     } catch (error) {
-      Alert.alert('检查更新失败', error instanceof Error ? error.message : '请稍后重试。');
+      setUpdateNotice({ title: '检查更新失败', message: error instanceof Error ? error.message : '请稍后重试。', tone: 'error' });
     } finally {
       setCheckingUpdate(false);
     }
   };
   return (
-    <ScrollView contentContainerStyle={styles.pageContent} showsVerticalScrollIndicator={false}>
-      <ScreenHeader eyebrow="F1 · 偏好设置" title="设置" />
-      <View style={styles.settingsCard}>
-        <View style={styles.settingsHeader}>
-          <View style={styles.settingsIcon}><Glyph path="M12 3v2m0 14v2m9-9h-2M5 12H3m15.4-6.4-1.4 1.4M7 17l-1.4 1.4m12.8 0L17 17M7 7 5.6 5.6M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z" color={C.red} size={20} /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.settingsTitle}>外观模式</Text>
-            <Text style={styles.settingsDescription}>选择应用的显示主题</Text>
+    <>
+      <ScrollView contentContainerStyle={styles.pageContent} showsVerticalScrollIndicator={false}>
+        <ScreenHeader eyebrow="F1 · 偏好设置" title="设置" />
+        <View style={styles.settingsCard}>
+          <View style={styles.settingsHeader}>
+            <View style={styles.settingsIcon}><Glyph path="M12 3v2m0 14v2m9-9h-2M5 12H3m15.4-6.4-1.4 1.4M7 17l-1.4 1.4m12.8 0L17 17M7 7 5.6 5.6M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z" color={C.red} size={20} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingsTitle}>外观模式</Text>
+              <Text style={styles.settingsDescription}>选择应用的显示主题</Text>
+            </View>
           </View>
+          <Segment items={[{ id: 'system', label: '跟随系统' }, { id: 'light', label: '日间模式' }, { id: 'dark', label: '夜间模式' }]} selected={themeMode} onSelect={onThemeModeChange} />
+          <Text style={styles.settingsHint}>{themeDescription}</Text>
         </View>
-        <Segment items={[{ id: 'system', label: '跟随系统' }, { id: 'light', label: '日间模式' }, { id: 'dark', label: '夜间模式' }]} selected={themeMode} onSelect={onThemeModeChange} />
-        <Text style={styles.settingsHint}>{themeDescription}</Text>
-      </View>
-      {Platform.OS === 'android' ? <View style={styles.settingsCard}>
-        <View style={styles.settingsHeader}>
-          <View style={styles.settingsIcon}><Glyph path="M12 3v12m0 0 5-5m-5 5-5-5M4 17v3h16v-3" color={C.red} size={20} /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.settingsTitle}>应用更新</Text>
-            <Text style={styles.settingsDescription}>检查并应用 Android 发布版更新</Text>
+        {Platform.OS === 'android' ? <View style={styles.settingsCard}>
+          <View style={styles.settingsHeader}>
+            <View style={styles.settingsIcon}><Glyph path="M12 3v12m0 0 5-5m-5 5-5-5M4 17v3h16v-3" color={C.red} size={20} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingsTitle}>应用更新</Text>
+              <Text style={styles.settingsDescription}>检查并应用 Android 发布版更新</Text>
+            </View>
           </View>
+          <Pressable accessibilityRole="button" accessibilityState={{ disabled: checkingUpdate }} disabled={checkingUpdate} onPress={() => void checkForUpdate()} style={[styles.noSeasonButton, checkingUpdate && { opacity: 0.65 }]}>
+            <Text style={styles.noSeasonButtonText}>{checkingUpdate ? '正在检查…' : '检查更新'}</Text>
+          </Pressable>
+        </View> : null}
+      </ScrollView>
+      <Modal transparent visible={updateNotice !== null} animationType="fade" statusBarTranslucent navigationBarTranslucent onRequestClose={() => setUpdateNotice(null)}>
+        <View style={[styles.updateModalRoot, { backgroundColor: 'rgba(23, 26, 31, 0.68)' }]}>
+          <Pressable accessibilityRole="button" accessibilityLabel="关闭更新提示" onPress={() => setUpdateNotice(null)} style={StyleSheet.absoluteFill} />
+          {updateNotice ? <View accessibilityViewIsModal style={styles.updateModal}>
+            <View style={styles.updateModalHeading}>
+              <View style={styles.updateModalIcon}>
+                <Glyph path={updateNotice.tone === 'error' ? 'M12 9v4m0 4h.01M10.3 3.9 1.8 18.2A2 2 0 0 0 3.5 21h17a2 2 0 0 0 1.7-2.8L13.7 3.9a2 2 0 0 0-3.4 0Z' : updateNotice.tone === 'success' ? 'M20 6 9 17l-5-5' : 'M12 8v4m0 4h.01M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z'} color={C.red} size={21} />
+              </View>
+              <View>
+                <Text style={styles.updateModalEyebrow}>F1 · 应用更新</Text>
+                <Text style={styles.updateModalStatus}>{updateNotice.tone === 'error' ? '检查未完成' : updateNotice.onConfirm ? '新版本已下载' : updateNotice.tone === 'success' ? '检查完成' : '环境提示'}</Text>
+              </View>
+            </View>
+            <Text accessibilityRole="header" style={styles.updateModalTitle}>{updateNotice.title}</Text>
+            <Text style={styles.updateModalMessage}>{updateNotice.message}</Text>
+            <View style={styles.updateModalActions}>
+              {updateNotice.onConfirm ? <Pressable accessibilityRole="button" onPress={() => setUpdateNotice(null)} style={styles.updateModalSecondary}>
+                <Text style={styles.updateModalSecondaryText}>稍后</Text>
+              </Pressable> : null}
+              <Pressable accessibilityRole="button" onPress={() => {
+                const onConfirm = updateNotice.onConfirm;
+                setUpdateNotice(null);
+                onConfirm?.();
+              }} style={styles.updateModalPrimary}>
+                <Text style={styles.updateModalPrimaryText}>{updateNotice.onConfirm ? '立即重启' : '知道了'}</Text>
+              </Pressable>
+            </View>
+          </View> : null}
         </View>
-        <Pressable accessibilityRole="button" accessibilityState={{ disabled: checkingUpdate }} disabled={checkingUpdate} onPress={() => void checkForUpdate()} style={[styles.noSeasonButton, checkingUpdate && { opacity: 0.65 }]}>
-          <Text style={styles.noSeasonButtonText}>{checkingUpdate ? '正在检查…' : '检查更新'}</Text>
-        </Pressable>
-      </View> : null}
-    </ScrollView>
+      </Modal>
+    </>
   );
+}
+
+function getHomeSessions(races: Race[], now: number) {
+  const sessions = races.flatMap((race) => race.sessions.map((session) => ({
+    race, session, start: Date.parse(session.at), end: Date.parse(session.endsAt ?? ''),
+  }))).filter(({ start }) => Number.isFinite(start)).sort((a, b) => a.start - b.start);
+  return {
+    currentSession: sessions.find(({ start, end }) => start <= now && now < end),
+    nextSession: sessions.find(({ start }) => start > now),
+  };
 }
 
 function HomePage({ onOpenRace, onGoSchedule, active, introComplete }: { onOpenRace: (race: Race) => void; onGoSchedule: () => void; active: boolean; introComplete: boolean }) {
@@ -1323,34 +1712,26 @@ function HomePage({ onOpenRace, onGoSchedule, active, introComplete }: { onOpenR
 
   useEffect(() => {
     if (!active) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [active]);
 
-  const timedSessions = races.flatMap((race) => race.sessions.map((session) => ({
-    race,
-    session,
-    start: Date.parse(session.at),
-    end: Date.parse(session.endsAt ?? ''),
-  })));
-  const currentSession = timedSessions.find(({ start, end }) => start <= now && now < end);
+  const { currentSession, nextSession } = getHomeSessions(races, now);
   const currentRace = currentSession?.race ?? races.find((race) => {
     const firstStart = Date.parse(race.sessions[0]?.at ?? '');
     const raceEnd = Date.parse(race.sessions.find((session) => session.name === '正赛')?.endsAt ?? '');
     return firstStart <= now && now < raceEnd;
   });
-  const currentWeekendNextSession = currentRace?.sessions.find((session) => Date.parse(session.at) > now);
   const latestFinishedRace = races.flatMap((race) => {
     const session = race.sessions.find((item) => item.name === '正赛');
     const end = Date.parse(session?.endsAt ?? '');
     return session && end <= now && now - end < 24 * 60 * 60 * 1000 ? [{ race, session, end }] : [];
   }).sort((a, b) => b.end - a.end)[0];
-  const nextRace = races.find((race) => race.id !== currentRace?.id && (
-    race.sessions.some((session) => Date.parse(session.at) > now) || (!race.sessions.length && !race.finished)
-  ));
-  const nextRaceSession = nextRace?.sessions.find((session) => Date.parse(session.at) > now) ?? nextRace?.sessions[0];
+  const nextRace = getHomeSessions(races.filter((race) => race.id !== currentRace?.id), now).nextSession?.race
+    ?? races.find((race) => race.id !== currentRace?.id && !race.sessions.length && !race.finished);
+  const nextRaceSession = nextRace ? getHomeSessions([nextRace], now).nextSession?.session : undefined;
   const featuredRace = currentRace ?? latestFinishedRace?.race ?? nextRace;
-  const featuredSession = currentRace ? currentSession?.session ?? currentWeekendNextSession : latestFinishedRace?.session ?? nextRaceSession;
   const recentResultKey = latestFinishedRace?.session.id;
   const recentResults = recentResultKey ? resultsBySession[recentResultKey] ?? [] : [];
   const podiumResults = [2, 1, 3].map((position) => recentResults.find((result) => result.position === position));
@@ -1373,7 +1754,7 @@ function HomePage({ onOpenRace, onGoSchedule, active, introComplete }: { onOpenR
     }
   };
 
-  const countdownStart = Date.parse((currentRace ? currentWeekendNextSession : nextRaceSession)?.at ?? '');
+  const countdownStart = nextSession?.start ?? NaN;
   const countdownSeconds = Number.isFinite(countdownStart) ? Math.max(0, Math.floor((countdownStart - now) / 1000)) : 0;
   const countdown = [Math.floor(countdownSeconds / 86400), Math.floor(countdownSeconds / 3600) % 24, Math.floor(countdownSeconds / 60) % 60, countdownSeconds % 60];
   const heroImage = featuredRace ? circuitImageUrl(featuredRace) : undefined;
@@ -1406,11 +1787,11 @@ function HomePage({ onOpenRace, onGoSchedule, active, introComplete }: { onOpenR
           </View>
           <Pressable accessibilityRole="button" onPress={() => onOpenRace(featuredRace)} style={styles.homePrimaryButton}><Text style={styles.homePrimaryButtonText}>{showsPreviousResult ? '查看完整赛果' : '查看赛事详情'}</Text><Text style={styles.homePrimaryButtonArrow}>›</Text></Pressable>
 
-          {currentRace ? <View style={styles.homeCurrentSession}>
-            <Text style={styles.homeCurrentLabel}>{currentSession ? '当前场次' : '周末下一场'}</Text>
-            <Text style={styles.homeCurrentName}>{currentSession?.session.name ?? currentWeekendNextSession?.name ?? '赛程安排'}</Text>
-            {featuredSession ? <Text style={styles.homeCurrentTime}>{formatTime(featuredSession.at)}{featuredSession.endsAt ? ` — ${formatTime(featuredSession.endsAt)}` : ''} · 本地时间</Text> : null}
-            {currentSession ? <Pressable accessibilityRole="link" onPress={() => { void Linking.openURL(F1_LIVE_TIMING_URL).catch(() => undefined); }} style={styles.homeOfficialLink}><Text style={styles.homeOfficialLinkText}>打开 F1 官方实时计时 ↗</Text></Pressable> : null}
+          {currentSession ? <View style={styles.homeCurrentSession}>
+            <Text style={styles.homeCurrentLabel}>正在进行</Text>
+            <Text style={styles.homeCurrentName}>{currentSession.session.name}</Text>
+            <Text style={styles.homeCurrentTime}>{formatTime(currentSession.session.at)}{currentSession.session.endsAt ? ` — ${formatTime(currentSession.session.endsAt)}` : ''} · 本地时间</Text>
+            <Pressable accessibilityRole="link" onPress={() => { void Linking.openURL(F1_LIVE_TIMING_URL).catch(() => undefined); }} style={styles.homeOfficialLink}><Text style={styles.homeOfficialLinkText}>打开 F1 官方实时计时 ↗</Text></Pressable>
           </View> : showsPreviousResult ? <View style={styles.homeResults}>
             {hasPodium ? <View style={styles.homePodium}>{podiumResults.map((result) => {
               if (!result) return null;
@@ -1428,10 +1809,16 @@ function HomePage({ onOpenRace, onGoSchedule, active, introComplete }: { onOpenR
                 <Text style={[styles.homePodiumPoints, winner && styles.homePodiumPointsWinner]}>{result.points != null ? `${result.points}分` : result.gap}</Text>
               </View>;
             })}</View> : <View style={styles.homeResultEmpty}><Text style={styles.homeResultEmptyText}>{status === 'loading' ? '正在同步前三名与车手照片…' : '前三名赛果或车手照片暂未同步'}</Text>{status !== 'loading' ? <Pressable accessibilityRole="button" disabled={refreshingResults} onPress={() => void refreshRecentResults()}><Text style={styles.homeRetryText}>{refreshingResults ? '正在刷新…' : '重新获取赛果 ↻'}</Text></Pressable> : null}</View>}
-          </View> : featuredSession ? <View style={styles.homeCountdown}>
-            <Text style={styles.homeCurrentLabel}>{currentRace ? '距离下一场' : '距离首场练习'}</Text>
+          </View> : null}
+          {!currentSession && nextSession ? <View style={styles.homeCurrentSession}>
+            <Text style={styles.homeCurrentLabel}>下一场 · {nextSession.race.name}</Text>
+            <Text style={styles.homeCurrentName}>{nextSession.session.name}</Text>
+            <Text style={styles.homeCurrentTime}>{formatTime(nextSession.session.at)} · 本地时间</Text>
+            <View style={styles.homeCountdown}>
+            <Text style={styles.homeCurrentLabel}>距离开始</Text>
             {countdown.map((value, index) => <View key={index} style={styles.homeCountdownCell}><Text style={styles.homeCountdownValue}>{String(value).padStart(2, '0')}</Text><Text style={styles.homeCountdownUnit}>{['天', '时', '分', '秒'][index]}</Text></View>)}
-          </View> : <Text style={styles.homeSchedulePending}>详细场次时间联网同步后显示</Text>}
+            </View>
+          </View> : !currentSession && !showsPreviousResult ? <Text style={styles.homeSchedulePending}>{races.some((race) => !race.finished) ? '详细场次时间联网同步后显示' : '本赛季暂无后续场次'}</Text> : null}
         </View>
 
         </Animated.View>
@@ -1512,7 +1899,7 @@ function FavoritesPage({ favorites, onToggle, onOpenRace, onOpenDriver, onOpenTe
 
 function StandingsPage({ tab, onTabChange, onOpenDriver, onOpenTeam }: { tab: StandingsTab; onTabChange: (tab: StandingsTab) => void; onOpenDriver: (id: string) => void; onOpenTeam: (id: string) => void }) {
   useThemeRevision();
-  const { drivers, teams } = useSeason();
+  const { drivers, teams, dataSource } = useSeason();
   const rows = tab === 'drivers' ? drivers : teams;
   return (
     <ScrollView contentContainerStyle={styles.pageContent} showsVerticalScrollIndicator={false}>
@@ -1533,7 +1920,7 @@ function StandingsPage({ tab, onTabChange, onOpenDriver, onOpenTeam }: { tab: St
           const teamColorText = tab === 'teams' && !isLightTeamColor(team.color) ? C.white : C.ink;
           return (
             <Pressable key={id} accessibilityRole="button" onPress={() => driver ? onOpenDriver(driver.id) : onOpenTeam(id)} style={[styles.standingRow, tab === 'teams' && { backgroundColor: team.color }]}>
-              <Text style={[styles.rankNumber, index < 3 && styles.rankNumberTop, tab === 'teams' && { color: teamColorText }]}>{String(index + 1).padStart(2, '0')}</Text>
+              <Text style={[styles.rankNumber, (row.position ?? index + 1) <= 3 && styles.rankNumberTop, tab === 'teams' && { color: teamColorText }]}>{String(row.position ?? index + 1).padStart(2, '0')}</Text>
               <TeamLogo teamId={team.id} size="standing" />
               <View style={styles.standingCopy}>
                 <Text style={[styles.standingName, tab === 'teams' && { color: teamColorText }]}>{driver ? driver.name : (row as Team).name}</Text>
@@ -1543,7 +1930,7 @@ function StandingsPage({ tab, onTabChange, onOpenDriver, onOpenTeam }: { tab: St
             </Pressable>
           );
         })}
-        <Text style={styles.disclaimer}>数据来自 OpenF1，赛季榜单随已发布的官方结果更新。此应用为非官方个人项目。</Text>
+        <Text style={styles.disclaimer}>{dataSource === 'calendar' ? '当前显示本地积分快照。' : '数据来自 OpenF1，赛季榜单随已发布的官方结果更新。'}此应用为非官方个人项目。</Text>
       </MotionPanel>
     </ScrollView>
   );
@@ -1654,14 +2041,20 @@ function RaceDetail({ race, onBack, onOpenDriver, favorite, onToggleFavorite }: 
       <DetailHeader title="赛事详情" subtitle={'第 ' + race.round + ' 站 · ' + race.country} onBack={onBack} favorite={favorite} onToggleFavorite={onToggleFavorite} />
       <DemoNotice />
       <View style={styles.detailTitleBlock}><Text style={styles.detailRaceName}>{race.name}</Text><Text style={styles.detailRaceVenue}>{race.venue} · {race.dates}</Text></View>
+      <MotionPanel motionKey={race.id} animateOnMount>
       <View style={styles.timeCard}>
         <Text style={styles.cardOverline}>RACE WEEKEND · {dataSource === 'openf1' ? 'OPENF1' : dataSource === 'cache' ? '本机缓存' : '官方赛历快照'}</Text>
         {race.sessions.length > 0 ? <>
-          <View style={styles.timeHeader}><Text style={styles.timeHeaderLabel}>场次</Text><Text style={styles.timeHeaderLabel}>赛道当地</Text><Text style={styles.timeHeaderLabel}>手机本地</Text></View>
-          {race.sessions.map((item) => <View key={item.id ?? item.name} style={styles.timeRow}><View style={styles.timeSession}><Text style={styles.timeSessionName}>{item.name}</Text><Text style={styles.timeDay}>{item.day}</Text></View><Text style={styles.timeValue}>{item.offset ? formatOffsetTime(item.at, item.offset) : formatTime(item.at, race.timeZone)}</Text><Text style={styles.timeValue}>{formatTime(item.at)}</Text></View>)}
+          <View style={styles.timeHeader}><Text style={[styles.timeHeaderLabel, styles.timeSession]}>场次</Text><Text style={styles.timeHeaderLabel}>赛道当地</Text><Text style={styles.timeHeaderLabel}>北京时间</Text></View>
+          {race.sessions.map((item) => <View key={item.id ?? item.name} style={styles.timeRow}><View style={styles.timeSession}><Text style={styles.timeSessionName}>{item.name}</Text><Text style={styles.timeDay}>{item.day}</Text></View><Text style={styles.timeValue}>{item.offset ? formatOffsetTime(item.at, item.offset) : formatTime(item.at, race.timeZone)}</Text><Text style={styles.timeValue}>{formatTime(item.at, 'Asia/Shanghai')}</Text></View>)}
         </> : <Text style={styles.upcomingNoteCopy}>当前离线赛历仅包含赛事日期；分场时间和成绩会在联网同步后显示。</Text>}
       </View>
-      <View style={styles.mapCard}><TrackMap key={race.id} race={race} /><CircuitFacts race={race} /></View>
+      </MotionPanel>
+      <MotionPanel motionKey={race.id} animateOnMount delay={120}>
+        <View style={styles.mapCard}><TrackMap key={race.id} race={race} /><CircuitFacts race={race} /></View>
+      </MotionPanel>
+      <MotionPanel motionKey={race.id} animateOnMount delay={240}>
+      <>
       <View style={styles.sectionHeading}><Text style={styles.sectionTitle}>{sessionFinished ? selectedSession + '成绩' : '比赛结果'}</Text><Text style={styles.sectionMeta}>{race.sessions.length === 0 ? 'CALENDAR ONLY' : sessionFinished ? status === 'live' ? 'OPENF1 RESULT' : 'SAVED RESULT' : 'UPCOMING'}</Text></View>
       {race.finished && race.sessions.length === 0 ? <View style={styles.upcomingNote}><Text style={styles.upcomingNoteTitle}>离线赛历不含分站成绩</Text><Text style={styles.upcomingNoteCopy}>连接 OpenF1 并同步后，可查看已发布的赛果。</Text></View> : <>
         {race.sessions.length > 0 ? <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.sessionScroller}><View style={styles.sessionChips}>{race.sessions.map((item) => <Pressable key={item.id ?? item.name} onPress={() => setSelectedSession(item.name)} style={[styles.sessionChip, selectedSession === item.name && styles.sessionChipActive]}><Text style={[styles.sessionChipText, selectedSession === item.name && styles.sessionChipTextActive]}>{item.name}</Text></Pressable>)}</View></ScrollView> : null}
@@ -1681,6 +2074,8 @@ function RaceDetail({ race, onBack, onOpenDriver, favorite, onToggleFavorite }: 
           {dataSource !== 'calendar' && (resultState !== 'ready' || results.length === 0) ? <View style={styles.upcomingNote}><Text style={styles.upcomingNoteTitle}>{resultState === 'loading' ? '正在载入场次成绩' : resultState === 'error' ? '暂无已缓存的本场成绩' : '暂无已公布成绩'}</Text><Text style={styles.upcomingNoteCopy}>{resultState === 'error' ? 'OpenF1 当前不可用，连接恢复后点上方状态重试。' : '成绩会在官方发布后由 OpenF1 更新。'}</Text></View> : null}
         </MotionPanel> : <View style={styles.upcomingNote}><Text style={styles.upcomingNoteTitle}>本场尚未结束</Text><Text style={styles.upcomingNoteCopy}>场次成绩会在活动结束并公布后显示。</Text></View>}
       </>}
+      </>
+      </MotionPanel>
     </ScrollView>
   );
 }
@@ -1785,7 +2180,7 @@ function DriverPosterIdentity({ name, signature, compact }: { name: string; sign
 }
 
 function ProfileDetail({ detail, onBack, favorite, onToggle, onOpenDriver, onOpenTeam }: { detail: Detail; onBack: () => void; favorite: boolean; onToggle: (id: string) => void; onOpenDriver: (id: string) => void; onOpenTeam: (id: string) => void }) {
-  const { races, drivers, teams } = useSeason();
+  const { races, drivers, teams, resultsBySession, dataSource } = useSeason();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const compact = screenWidth < 600 || screenHeight < 600;
   const posterHeight = compact ? Math.min(620, Math.max(380, Math.round(screenHeight * 0.58))) : 620;
@@ -1812,7 +2207,34 @@ function ProfileDetail({ detail, onBack, favorite, onToggle, onOpenDriver, onOpe
   const driver = detail.kind === 'driver' ? drivers.find((item) => item.id === detail.id) : undefined;
   if (detail.kind === 'driver' && !driver) return <ScrollView contentContainerStyle={styles.pageContent}><DetailHeader title="车手资料" subtitle="CURRENT SEASON" onBack={onBack} /><DemoNotice /><Text style={styles.emptyCopy}>当前数据中没有这位车手。</Text></ScrollView>;
   if (detail.kind === 'team' && !teams.some((item) => item.id === detail.id)) return <ScrollView contentContainerStyle={styles.pageContent}><DetailHeader title="车队资料" subtitle="CURRENT SEASON" onBack={onBack} /><DemoNotice /><Text style={styles.emptyCopy}>当前数据中没有这支车队。</Text></ScrollView>;
+  const resultForDriver = (session?: Session) => {
+    if (!driver || !session?.id) return undefined;
+    return resultsBySession[session.id]?.find((item) => item.driverId === driver.id || item.driverCode === driver.code || (!item.driverCode && item.driverId === `driver-${driver.number}`));
+  };
+  const driverSeasonResults = driver ? races.filter((race) => race.finished).sort((a, b) => b.round - a.round).map((race) => {
+    const raceSession = race.sessions.find((session) => session.name === '正赛');
+    return { race, result: resultForDriver(raceSession) };
+  }) : [];
+  const driverSeasonWins = driverSeasonResults.filter(({ result }) => result?.status === 'finished' && result.position === 1).length;
+  const driverSeasonPodiums = driverSeasonResults.filter(({ result }) => result?.status === 'finished' && result.position <= 3).length;
+  const driverSeasonPoles = driver ? races.reduce((count, race) => count + Number(resultForDriver(race.sessions.find((session) => session.name === '排位赛'))?.position === 1), 0) : 0;
   const team = detail.kind === 'team' ? teams.find((item) => item.id === detail.id) ?? teams[0]! : driver ? TeamFor(driver.teamId, teams) : teams[0]!;
+  const completedRaceSessions = races.flatMap((race) => {
+    const session = race.sessions.find((item) => item.name === '正赛');
+    return race.finished && session?.id ? [session] : [];
+  });
+  const syncedRaceSessions = completedRaceSessions.filter((session) => resultsBySession[session.id!] !== undefined);
+  const completedQualifyingSessions = races.flatMap((race) => race.sessions.filter((session) => session.name.includes('排位') && session.id && (session.ended ?? Date.parse(session.endsAt ?? session.at) < Date.now())));
+  const syncedQualifyingCount = completedQualifyingSessions.filter((session) => resultsBySession[session.id!] !== undefined).length;
+  const teamRaceResults = syncedRaceSessions.flatMap((session) => resultsBySession[session.id!] ?? []).filter((result) => result.teamId === team.id);
+  const teamRaceCount = syncedRaceSessions.filter((session) => (resultsBySession[session.id!] ?? []).some((result) => result.teamId === team.id)).length;
+  const teamQualifyingResults = races.flatMap((race) => race.sessions
+    .filter((session) => session.name.includes('排位') && session.id && (session.ended ?? Boolean(resultsBySession[session.id])))
+    .flatMap((session) => resultsBySession[session.id!] ?? [])).filter((result) => result.teamId === team.id);
+  const fastestLapsKnown = syncedRaceSessions.length > 0 && syncedRaceSessions.every((session) => {
+    const rows = resultsBySession[session.id!] ?? [];
+    return rows.length > 0 && rows.every((result) => result.fastestLapChecked === true && typeof result.fastestLap === 'boolean');
+  });
   const driverNumberColor = C.ink;
   const driverProfile: DriverProfile | undefined = driver ? driverProfiles.find((item) => item.code === driver.code) : undefined;
   const driverSignature = driverProfile?.source.split('/').pop()?.split('-')[0];
@@ -1865,7 +2287,7 @@ function ProfileDetail({ detail, onBack, favorite, onToggle, onOpenDriver, onOpe
             </View>
           </View>
         </View>
-        <View style={styles.driverNoticeWrap}><DemoNotice /></View>
+        <MotionPanel motionKey={detail.id} animateOnMount delay={0}><View style={styles.driverNoticeWrap}><DemoNotice /></View></MotionPanel>
       </> : <>
         <View style={styles.teamHero}>
           <View style={[styles.teamHeroStage, { height: compact ? 220 : Math.min(430, Math.max(290, Math.round(screenWidth * 0.28))), backgroundColor: team.color }]}>
@@ -1903,42 +2325,66 @@ function ProfileDetail({ detail, onBack, favorite, onToggle, onOpenDriver, onOpe
         </View>
       </>}
       {driver ? <View style={styles.driverStatsSection} onLayout={({ nativeEvent }) => setDriverStatsOffset(nativeEvent.layout.y)}>
-        {driverProfile ? <View style={styles.profileDataCard}>
+        {driverProfile ? <MotionPanel motionKey={detail.id} animateOnMount delay={120}><View style={styles.profileDataCard}>
           <Text style={styles.profileDataTitle}>2026 赛季统计</Text>
           <View style={styles.driverSeasonLeads}>
-            <View style={styles.driverSeasonLead}><Text style={styles.driverSeasonLeadValue}>{driverProfile.points}</Text><Text style={styles.profileMetricLabel}>积分</Text></View>
-            <View style={styles.driverSeasonLead}><Text style={styles.driverSeasonLeadValue}>{driverProfile.season.wins}</Text><Text style={styles.profileMetricLabel}>分站胜利</Text></View>
+            <View style={styles.driverSeasonLead}><Text style={styles.driverSeasonLeadValue}>{driver.points ?? driverProfile.points}</Text><Text style={styles.profileMetricLabel}>积分</Text></View>
+            <View style={styles.driverSeasonLead}><Text style={styles.driverSeasonLeadValue}>{driverSeasonWins}</Text><Text style={styles.profileMetricLabel}>分站胜利</Text></View>
           </View>
           <View style={styles.driverSeasonGrid}>{[
-            { label: '大奖赛场次', value: driverProfile.season.races }, { label: '领奖台', value: driverProfile.season.podiums },
-            { label: '杆位', value: driverProfile.season.poles }, { label: '最快圈', value: driverProfile.season.fastestLaps },
+            { label: '大奖赛场次', value: driverSeasonResults.length }, { label: '领奖台', value: driverSeasonPodiums },
+            { label: '杆位', value: driverSeasonPoles }, { label: '最快圈', value: driverProfile.season.fastestLaps },
           ].map((item) => <View key={item.label} style={styles.driverSeasonMetric}><Text style={styles.driverSeasonMetricValue}>{item.value}</Text><Text style={styles.profileMetricLabel}>{item.label}</Text></View>)}</View>
-        </View> : null}
-        {driverProfile ? <ProfileMetricCard title="F1 生涯累计" values={[
+        </View></MotionPanel> : null}
+        <MotionPanel motionKey={detail.id} animateOnMount delay={240}><View style={styles.profileDataCard}>
+          <View style={styles.driverRaceHistoryHeader}><Text style={[styles.profileDataTitle, { marginBottom: 0 }]}>本赛季历站成绩</Text><Text style={styles.profileMetricLabel}>{driverSeasonResults.length} STOPS</Text></View>
+          {driverSeasonResults.length ? driverSeasonResults.map(({ race, result }) => {
+            const position = !result ? '—' : result.status === 'dsq' ? 'DSQ' : result.status === 'dns' ? 'DNS' : result.position < 99 ? `P${result.position}` : result.status === 'dnf' ? 'DNF' : '—';
+            const statusLabel = !result ? '待同步' : result.status === 'dnf' ? '退赛' : result.status === 'dns' ? '未发车' : result.status === 'dsq' ? '取消资格' : result.points === null ? '完赛' : `${result.points} 分`;
+            return <View key={race.id} style={[styles.resultRow, styles.driverRaceHistoryRow]}>
+              <Text style={styles.driverRaceHistoryRound}>R{String(race.round).padStart(2, '0')}</Text>
+              <View style={styles.resultDriverCopy}><Text numberOfLines={1} style={styles.resultDriverCode}>{race.name}</Text><Text style={styles.resultTeamName}>{race.country}</Text></View>
+              <View style={styles.driverRaceHistoryResult}><Text style={[styles.driverRaceHistoryPosition, !result && { color: C.muted }]}>{position}</Text><Text style={styles.driverRaceHistoryStatus}>{statusLabel}</Text></View>
+            </View>;
+          }) : <Text style={styles.driverRaceHistoryEmpty}>本赛季尚无已完成分站。</Text>}
+        </View></MotionPanel>
+        {driverProfile ? <MotionPanel motionKey={detail.id} animateOnMount delay={360}><ProfileMetricCard title="F1 生涯累计" values={[
           { label: '大奖赛参赛', value: driverProfile.career.entered }, { label: '生涯积分', value: driverProfile.career.points },
           { label: '分站胜利', value: driverProfile.career.wins }, { label: '领奖台', value: driverProfile.career.podiums },
           { label: '杆位', value: driverProfile.career.poles }, { label: '世界冠军', value: driverProfile.career.titles },
-        ]} /> : null}
-        {driverProfile ? <SourceNote source={driverProfile.source} asOf={libraryStatsAsOf} /> : null}
+        ]} /></MotionPanel> : null}
+        {driverProfile ? <MotionPanel motionKey={detail.id} animateOnMount delay={480}><SourceNote source={driverProfile.source} asOf={libraryStatsAsOf} /></MotionPanel> : null}
       </View> : <>
-        <View style={[styles.sectionHeading, styles.teamSectionHeading]}><Text style={[styles.sectionTitle, styles.teamSectionTitle]}>车手阵容</Text><Text style={styles.sectionMeta}>{teamDrivers.length} DRIVERS</Text></View>
-        <View style={styles.teamDriversGrid}>{teamDrivers.map((item) => <DriverListCard key={item.id} driver={item} column={!compact} onPress={() => onOpenDriver(item.id)} />)}</View>
-        <View style={styles.teamDetailNotice}><DemoNotice /></View>
+        <MotionPanel motionKey={detail.id} animateOnMount delay={0}>
+          <View style={[styles.sectionHeading, styles.teamSectionHeading]}><Text style={[styles.sectionTitle, styles.teamSectionTitle]}>车手阵容</Text><Text style={styles.sectionMeta}>{teamDrivers.length} DRIVERS</Text></View>
+          <View style={styles.teamDriversGrid}>{teamDrivers.map((item) => <DriverListCard key={item.id} driver={item} column={!compact} onPress={() => onOpenDriver(item.id)} />)}</View>
+        </MotionPanel>
+        <MotionPanel motionKey={detail.id} animateOnMount delay={120}><View style={styles.teamDetailNotice}><DemoNotice /></View></MotionPanel>
         {teamProfile ? <>
-          <ProfileMetricCard title="2026 赛季统计" values={[{ label: '车队积分', value: team.points ?? '—' }, ...statValues(teamProfile.season)]} />
-          <ProfileMetricCard title="车队 F1 生涯累计" values={[
+          <MotionPanel motionKey={detail.id} animateOnMount delay={240}><ProfileMetricCard title={dataSource === 'calendar' ? '2026 赛季统计 · 本地快照' : `2026 赛季统计 · 正赛 ${syncedRaceSessions.length}/${completedRaceSessions.length} · 排位 ${syncedQualifyingCount}/${completedQualifyingSessions.length} 站`} values={[
+            { label: '车队积分', value: team.points ?? '—' },
+            ...(dataSource === 'calendar' ? statValues(teamProfile.season) : [
+              { label: '大奖赛场次', value: teamRaceCount },
+              { label: '分站胜利', value: teamRaceResults.filter((result) => result.status === 'finished' && result.position === 1).length },
+              { label: '领奖台', value: teamRaceResults.filter((result) => result.status === 'finished' && result.position <= 3).length },
+              { label: '杆位', value: teamQualifyingResults.filter((result) => result.status === 'finished' && result.position === 1).length },
+              { label: '最快圈', value: fastestLapsKnown ? teamRaceResults.filter((result) => result.fastestLap === true).length : '—' },
+            ]),
+          ]} /></MotionPanel>
+          {dataSource !== 'calendar' ? <MotionPanel motionKey={detail.id} animateOnMount delay={300}><SourceNote source="https://openf1.org/docs/" label={dataSource === 'openf1' ? 'OpenF1' : 'OpenF1 缓存'} /></MotionPanel> : null}
+          <MotionPanel motionKey={detail.id} animateOnMount delay={360}><ProfileMetricCard title="车队 F1 生涯累计" values={[
             { label: '大奖赛参赛', value: teamProfile.career.entered }, { label: '车队积分', value: teamProfile.career.points },
             { label: '分站胜利', value: teamProfile.career.wins }, { label: '领奖台', value: teamProfile.career.podiums },
             { label: '杆位', value: teamProfile.career.poles }, { label: '车队冠军', value: teamProfile.career.titles },
-          ]} />
-          <ProfileInfoCard title="车队资料" rows={[
+          ]} /></MotionPanel>
+          <MotionPanel motionKey={detail.id} animateOnMount delay={480}><ProfileInfoCard title="车队资料" rows={[
             { label: '官方全名', value: teamProfile.fullName }, { label: '基地', value: teamProfile.base },
             { label: '车队负责人', value: teamProfile.principal }, { label: '技术负责人', value: teamProfile.technicalChief },
             { label: '底盘', value: teamProfile.chassis }, { label: '动力单元', value: teamProfile.powerUnit },
             { label: '首次参赛', value: teamProfile.firstEntry },
-          ]} />
-        </> : <ProfileInfoCard title="车队资料" rows={[{ label: '基地', value: team.base }]} />}
-        {teamProfile ? <SourceNote source={teamProfile.source} asOf={libraryStatsAsOf} /> : null}
+          ]} /></MotionPanel>
+        </> : <MotionPanel motionKey={detail.id} animateOnMount delay={240}><ProfileInfoCard title="车队资料" rows={[{ label: '基地', value: team.base }]} /></MotionPanel>}
+        {teamProfile ? <MotionPanel motionKey={detail.id} animateOnMount delay={600}><SourceNote source={teamProfile.source} asOf={libraryStatsAsOf} /></MotionPanel> : null}
       </>}
       </ScrollView>
     </View>
@@ -1954,6 +2400,7 @@ function App() {
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const seasonDataRef = useRef<SeasonData | null>(null);
+  const seasonSyncedAtRef = useRef<string | null>(null);
   const driversRef = useRef<Driver[]>([]);
   const resultsBySessionRef = useRef<ResultsBySession>({});
   const sessionRequestsRef = useRef(new Map<string, Promise<Result[]>>());
@@ -1968,34 +2415,32 @@ function App() {
   const saveSessionResults = useCallback((sessionKey: string, rows: Result[]) => {
     const previous = resultsBySessionRef.current[sessionKey];
     if (previous && JSON.stringify(previous) === JSON.stringify(rows)) {
-      const savedAt = new Date().toISOString();
-      setSyncedAt(savedAt);
+      const savedAt = seasonSyncedAtRef.current;
       const data = seasonDataRef.current;
-      if (data) persistSeasonCache(data, resultsBySessionRef.current, savedAt);
+      if (data && savedAt) persistSeasonCache(data, resultsBySessionRef.current, savedAt);
       return;
     }
     const next = { ...resultsBySessionRef.current, [sessionKey]: rows };
-    const savedAt = new Date().toISOString();
+    const savedAt = seasonSyncedAtRef.current;
     resultsBySessionRef.current = next;
     setResultsBySession(next);
-    setSyncedAt(savedAt);
     const data = seasonDataRef.current;
-    if (data) persistSeasonCache(data, next, savedAt);
+    if (data && savedAt) persistSeasonCache(data, next, savedAt);
   }, [persistSeasonCache]);
   const loadSessionResults = useCallback((sessionKey: string, sessionName: string, refresh = false): Promise<Result[]> => {
     const cached = resultsBySessionRef.current[sessionKey];
-    if (!refresh && cached && !needsEventTeamRefresh(cached)) return Promise.resolve(cached);
+    if (!refresh && cached && !needsSessionRefresh(cached, sessionName)) return Promise.resolve(cached);
     const existingRequest = sessionRequestsRef.current.get(sessionKey);
     if (existingRequest) return existingRequest;
     const request = (async () => {
       if (!refresh) {
         const legacyCache = await readOpenF1ResultsCache(sessionKey);
-        if (legacyCache && !needsEventTeamRefresh(legacyCache)) {
+        if (legacyCache && !needsSessionRefresh(legacyCache, sessionName)) {
           saveSessionResults(sessionKey, legacyCache);
           return legacyCache;
         }
         const newlyCached = resultsBySessionRef.current[sessionKey];
-        if (newlyCached && !needsEventTeamRefresh(newlyCached)) return newlyCached;
+        if (newlyCached && !needsSessionRefresh(newlyCached, sessionName)) return newlyCached;
       }
       const rows = await loadOpenF1Results(sessionKey, driversRef.current, sessionName);
       saveSessionResults(sessionKey, rows);
@@ -2009,12 +2454,13 @@ function App() {
     let freshDataLoaded = false;
     AsyncStorage.getItem(OPENF1_CACHE_KEY)
       .then((value) => {
-        if (!active || freshDataLoaded || !value) return;
+        if (!active || freshDataLoaded || seasonDataRef.current || !value) return;
         try {
           const cache: unknown = JSON.parse(value);
           if (isSeasonCache(cache)) {
             const data = withKnown2026Drivers(cache.data);
             seasonDataRef.current = data;
+            seasonSyncedAtRef.current = cache.savedAt;
             driversRef.current = data.drivers;
             resultsBySessionRef.current = cache.resultsBySession ?? {};
             setSeason(data);
@@ -2035,6 +2481,7 @@ function App() {
         seasonDataRef.current = data;
         driversRef.current = data.drivers;
         const savedAt = new Date().toISOString();
+        seasonSyncedAtRef.current = savedAt;
         setSeason(data);
         setDataSource('openf1');
         setSyncedAt(savedAt);
@@ -2048,13 +2495,13 @@ function App() {
           let lastRequestAt = 0;
           for (const session of completedSessions) {
             if (!active) return;
-            if (resultsBySessionRef.current[session.id] && !needsEventTeamRefresh(resultsBySessionRef.current[session.id])) continue;
+            if (resultsBySessionRef.current[session.id] && !needsSessionRefresh(resultsBySessionRef.current[session.id], session.name)) continue;
             const legacyCache = await readOpenF1ResultsCache(session.id);
-            if (legacyCache && !needsEventTeamRefresh(legacyCache)) {
+            if (legacyCache && !needsSessionRefresh(legacyCache, session.name)) {
               saveSessionResults(session.id, legacyCache);
               continue;
             }
-            if (!active || (resultsBySessionRef.current[session.id] && !needsEventTeamRefresh(resultsBySessionRef.current[session.id]))) continue;
+            if (!active || (resultsBySessionRef.current[session.id] && !needsSessionRefresh(resultsBySessionRef.current[session.id], session.name))) continue;
             const wait = Math.max(0, 2000 - (Date.now() - lastRequestAt));
             if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
             if (!active) return;
@@ -2091,56 +2538,89 @@ function App() {
   return <SafeAreaProvider><SeasonContext.Provider value={value}><AppContent /></SeasonContext.Provider></SafeAreaProvider>;
 }
 
-function StartupIntro({ ready, onDone }: { ready: boolean; onDone: () => void }) {
+const INTRO_ROUTE_PATH = 'M156 755 H407 C473 755 514 704 514 637 V389 C514 320 560 269 630 269 H868';
+
+function StartupIntro({ ready, onRevealStart, onDone, isDarkTheme }: { ready: boolean; onRevealStart: () => void; onDone: () => void; isDarkTheme: boolean }) {
   const reduceMotion = useContext(MotionPreferenceContext);
-  const spin = useRef(new Animated.Value(0)).current;
-  const breakup = useRef(new Animated.Value(0)).current;
+  const curveDraw = useRef(new Animated.Value(1300)).current;
+  const racer = useRef(new Animated.Value(INTRO_RACER_LENGTH)).current;
+  const straighten = useRef(new Animated.Value(0)).current;
+  const departure = useRef(new Animated.Value(0)).current;
   const overlayOpacity = useRef(new Animated.Value(1)).current;
+  const [curveComplete, setCurveComplete] = useState(false);
+  const [drawingComplete, setDrawingComplete] = useState(false);
   const onDoneRef = useRef(onDone);
+  const onRevealStartRef = useRef(onRevealStart);
+  const { width } = useWindowDimensions();
+  const backdropColor = isDarkTheme ? '#F5F6F7' : C.ink;
+  const routeColor = isDarkTheme ? C.ink : '#F5F6F7';
   onDoneRef.current = onDone;
+  onRevealStartRef.current = onRevealStart;
 
   useEffect(() => {
-    if (!ready) return;
-    spin.setValue(0);
-    breakup.setValue(0);
+    straighten.setValue(0);
+    departure.setValue(0);
     overlayOpacity.setValue(1);
-    const timeline: Animated.CompositeAnimation[] = [];
-    if (!reduceMotion) {
-      timeline.push(Animated.timing(spin, { toValue: 1, duration: 720, easing: Easing.inOut(Easing.cubic), useNativeDriver }));
-      timeline.push(Animated.spring(breakup, { toValue: 1, stiffness: 105, damping: 15, mass: 0.8, useNativeDriver }));
+    if (reduceMotion) {
+      curveDraw.setValue(0);
+      racer.setValue(-(INTRO_ROUTE_LENGTH - INTRO_RACER_LENGTH));
+      setCurveComplete(true);
+      setDrawingComplete(true);
+      return;
     }
-    timeline.push(Animated.delay(reduceMotion ? 0 : 80));
-    timeline.push(Animated.timing(overlayOpacity, { toValue: 0, duration: reduceMotion ? 140 : 210, easing: Easing.out(Easing.cubic), useNativeDriver }));
-    const animation = Animated.sequence(timeline);
-    animation.start(({ finished }) => { if (finished) onDoneRef.current(); });
-    return () => animation.stop();
-  }, [ready, reduceMotion, spin, breakup, overlayOpacity]);
+    curveDraw.setValue(1300);
+    racer.setValue(INTRO_RACER_LENGTH);
+    setCurveComplete(false);
+    setDrawingComplete(false);
+    const drawing = Animated.timing(curveDraw, { toValue: 0, duration: 520, easing: Easing.out(Easing.cubic), useNativeDriver: false });
+    let racerRun: Animated.CompositeAnimation | null = null;
+    drawing.start(({ finished }) => {
+      if (!finished) return;
+      setCurveComplete(true);
+      racerRun = Animated.sequence([
+        Animated.timing(racer, { toValue: 0, duration: 180, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
+        Animated.timing(racer, { toValue: -(INTRO_ROUTE_LENGTH - INTRO_RACER_LENGTH), duration: 780, easing: Easing.in(Easing.cubic), useNativeDriver: false }),
+      ]);
+      racerRun.start(({ finished: raced }) => { if (raced) setDrawingComplete(true); });
+    });
+    return () => { drawing.stop(); racerRun?.stop(); };
+  }, [curveDraw, racer, reduceMotion, straighten, departure, overlayOpacity]);
 
-  const logoTransform = [
-    { rotate: spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) },
-  ];
-  const ringTransform = [
-    { translateX: breakup.interpolate({ inputRange: [0, 1], outputRange: [0, -72] }) },
-    { translateY: breakup.interpolate({ inputRange: [0, 1], outputRange: [0, -52] }) },
-    { rotate: breakup.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-112deg'] }) },
-    { scale: breakup.interpolate({ inputRange: [0, 1], outputRange: [1, 0.78] }) },
-  ];
-  const barTransform = [
-    { translateX: breakup.interpolate({ inputRange: [0, 1], outputRange: [0, 88] }) },
-    { translateY: breakup.interpolate({ inputRange: [0, 1], outputRange: [0, 56] }) },
-    { rotate: breakup.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '152deg'] }) },
-    { scale: breakup.interpolate({ inputRange: [0, 1], outputRange: [1, 0.72] }) },
-  ];
-  const segmentOpacity = breakup.interpolate({ inputRange: [0, 0.68, 1], outputRange: [1, 1, 0] });
+  useEffect(() => {
+    if (!ready || !drawingComplete) return;
+    let cancelled = false;
+    let exit: Animated.CompositeAnimation | null = null;
+    const depart = () => {
+      if (cancelled) return;
+      onRevealStartRef.current();
+      exit = reduceMotion
+        ? Animated.timing(overlayOpacity, { toValue: 0, duration: 140, easing: Easing.out(Easing.cubic), useNativeDriver })
+        : Animated.parallel([
+          Animated.timing(straighten, { toValue: 1, duration: 1000, easing: Easing.inOut(Easing.cubic), useNativeDriver }),
+          Animated.timing(departure, { toValue: 1, duration: 1250, easing: Easing.inOut(Easing.cubic), useNativeDriver }),
+        ]);
+      exit.start(({ finished }) => { if (finished) onDoneRef.current(); });
+    };
+    depart();
+    return () => { cancelled = true; exit?.stop(); };
+  }, [ready, drawingComplete, reduceMotion, overlayOpacity, straighten, departure]);
+
+  const departureX = departure.interpolate({ inputRange: [0, 1], outputRange: [0, width + 220] });
+  const straightenScale = straighten.interpolate({ inputRange: [0, 1], outputRange: [1, 0.08] });
+  const backdropOpacity = departure.interpolate({ inputRange: [0, 0.62, 1], outputRange: [1, 0, 0] });
   return (
-    <Animated.View accessibilityViewIsModal accessibilityLabel="F1 Gridline" pointerEvents="auto" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 100, elevation: 100, alignItems: 'center', justifyContent: 'center', backgroundColor: C.ink, opacity: overlayOpacity }}>
-      <Animated.View style={{ width: 220, height: 220, transform: logoTransform }}>
-        <Animated.View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, opacity: segmentOpacity, transform: ringTransform }}>
-          <Svg width="100%" height="100%" viewBox="0 0 1024 1024"><Path d="M716 258C646 200 566 166 478 166 290 166 151 310 151 496c0 184 144 328 328 328 173 0 301-128 301-282V510" fill="none" stroke="#F5F6F7" strokeWidth={94} strokeLinecap="round" strokeLinejoin="round" /></Svg>
-        </Animated.View>
-        <Animated.View style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, opacity: segmentOpacity, transform: barTransform }}>
-          <Svg width="100%" height="100%" viewBox="0 0 1024 1024"><Path d="M780 510H568" fill="none" stroke="#E31C3D" strokeWidth={94} strokeLinecap="round" /></Svg>
-        </Animated.View>
+    <Animated.View accessibilityViewIsModal accessibilityLabel="F1 Gridline" pointerEvents="auto" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 100, elevation: 100, alignItems: 'center', justifyContent: 'center', opacity: overlayOpacity }}>
+      <Animated.View pointerEvents="none" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: backdropColor, opacity: backdropOpacity }} />
+      {/* ponytail: native squash keeps exit smooth; restore point-wise SVG morph only if exact contour flattening is required. */}
+      <Animated.View style={{ width: 220, height: 220, transform: [{ translateX: departureX }, { scaleY: straightenScale }] }}>
+        <View style={{ width: 220, height: 220 }}>
+          <Svg width="100%" height="100%" viewBox="0 0 1024 1024">
+            <G transform="matrix(0.8803 0.1871 -0.1871 0.8803 157.1 -34.5)" fill="none" strokeLinecap="butt" strokeLinejoin="round">
+              <AnimatedPath d={INTRO_ROUTE_PATH} stroke={routeColor} strokeWidth={123} strokeDasharray={1300} strokeDashoffset={curveDraw} />
+              <AnimatedPath d={INTRO_ROUTE_PATH} stroke="#E31C3D" strokeOpacity={curveComplete ? 1 : 0} strokeWidth={52} strokeLinecap="round" strokeDasharray={[INTRO_RACER_LENGTH, INTRO_ROUTE_LENGTH + INTRO_RACER_LENGTH]} strokeDashoffset={racer} />
+            </G>
+          </Svg>
+        </View>
       </Animated.View>
     </Animated.View>
   );
@@ -2188,11 +2668,15 @@ function CachedSection({ active, ready, preloadDelay, children }: {
 }
 
 function AppContent() {
-  const { races, status, hasSeasonData } = useSeason();
+  const { races, drivers, teams, status, syncedAt, hasSeasonData } = useSeason();
   const { width: viewportWidth } = useWindowDimensions();
   const systemColorScheme = useColorScheme();
   const [fontsLoaded] = useFonts({ F1Signature: require('./assets/fonts/Caveat[wght].ttf') });
   const [section, setSection] = useState<Section>('home');
+  const bottomNavIndex = Math.max(0, navItems.findIndex((item) => item.id === section));
+  const bottomNavPosition = useRef(new Animated.Value(bottomNavIndex)).current;
+  const [bottomNavWidth, setBottomNavWidth] = useState(0);
+  const bottomNavItemWidth = Math.max(0, (bottomNavWidth - 10) / navItems.length);
   const [scheduleFilter, setScheduleFilter] = useState<ScheduleFilter>('upcoming');
   const [standingsTab, setStandingsTab] = useState<StandingsTab>('drivers');
   const [libraryTab, setLibraryTab] = useState<LibraryTab>('drivers');
@@ -2200,17 +2684,30 @@ function AppContent() {
   const [detailHistory, setDetailHistory] = useState<Detail[]>([]);
   const driverDetailOpen = detail?.kind === 'driver';
   const [favorites, setFavorites] = useState<string[]>([]);
+  const [widgetRaceId, setWidgetRaceId] = useState<string | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>('system');
   const [storageReady, setStorageReady] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const [introComplete, setIntroComplete] = useState(false);
+  const [homeRevealStarted, setHomeRevealStarted] = useState(false);
   const finishIntro = useCallback(() => setIntroComplete(true), []);
+  const startHomeReveal = useCallback(() => setHomeRevealStarted(true), []);
+  useLayoutEffect(() => { SplashScreen.hide(); }, []);
   const isDarkTheme = themeMode === 'dark' || (themeMode === 'system' && systemColorScheme === 'dark');
   // ponytail: this app has one theme root; use context-bound styles if it grows to multiple roots.
   styles = isDarkTheme ? darkStyles : lightStyles;
   C.canvas = isDarkTheme ? '#141619' : '#F5F6F7';
   C.muted = isDarkTheme ? '#AEB4BC' : '#7D858E';
   C.line = isDarkTheme ? '#383C42' : '#E8EAED';
+  useEffect(() => {
+    bottomNavPosition.stopAnimation();
+    if (reduceMotion || viewportWidth >= 620) {
+      bottomNavPosition.setValue(bottomNavIndex);
+      return;
+    }
+    Animated.spring(bottomNavPosition, { toValue: bottomNavIndex, damping: 24, stiffness: 320, mass: 0.85, useNativeDriver }).start();
+    return () => bottomNavPosition.stopAnimation();
+  }, [bottomNavIndex, bottomNavPosition, reduceMotion, viewportWidth]);
   useEffect(() => {
     let active = true;
     const updateReduceMotion = (enabled: boolean) => {
@@ -2265,6 +2762,14 @@ function AppContent() {
       setDetailHistory((history) => history.slice(0, -1));
     } else setDetail(null);
   }, [detailHistory]);
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !detail) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      goBack();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [detail, goBack]);
   const goTo = useCallback((next: Section) => {
     setSection(next);
     setDetail(null);
@@ -2273,29 +2778,99 @@ function AppContent() {
   const goToSchedule = useCallback(() => goTo('schedule'), [goTo]);
   const goToLibrary = useCallback(() => goTo('library'), [goTo]);
 
-  const appReady = storageReady && fontsLoaded && (status !== 'loading' || hasSeasonData);
-  if (!appReady && !introComplete) return (
-    <MotionPreferenceContext.Provider value={reduceMotion}>
-      <SafeAreaView style={[styles.safeArea, { backgroundColor: C.ink }]}>
-        <StatusBar style="light" />
-        <View style={[styles.appRoot, { backgroundColor: C.ink }]}>
-          <StartupIntro ready={false} onDone={finishIntro} />
-        </View>
-      </SafeAreaView>
-    </MotionPreferenceContext.Provider>
-  );
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const readWidgetUrl = (url: string | null) => {
+      const match = url?.match(/^f1gridline:\/\/race\/([^/?#]+)/i);
+      if (match?.[1]) {
+        try { setWidgetRaceId(decodeURIComponent(match[1])); } catch { setWidgetRaceId(null); }
+      }
+    };
+    const subscription = Linking.addEventListener('url', ({ url }) => readWidgetUrl(url));
+    void Linking.getInitialURL().then(readWidgetUrl).catch(() => undefined);
+    return () => subscription.remove();
+  }, []);
 
+  useEffect(() => {
+    if (!widgetRaceId) return;
+    if (races.some((race) => race.id === widgetRaceId)) {
+      openRaceById(widgetRaceId);
+      setWidgetRaceId(null);
+    } else if (status !== 'loading' && hasSeasonData) {
+      setWidgetRaceId(null);
+    }
+  }, [hasSeasonData, openRaceById, races, status, widgetRaceId]);
+
+  useEffect(() => {
+    if (!hasSeasonData) {
+      updateGridlineWidgetData(null);
+      return;
+    }
+    const widgetRaces = races.flatMap((race) => {
+      const session = race.sessions.find((item) => item.name === '正赛');
+      const weekendStart = Date.parse(race.sessions[0]?.at ?? '');
+      const startAt = Date.parse(session?.at ?? '');
+      const endAt = Date.parse(session?.endsAt ?? '');
+      return session && Number.isFinite(weekendStart) && Number.isFinite(startAt) && Number.isFinite(endAt)
+        ? [{ id: race.id, name: race.name, location: race.country, weekendStart, startAt, endAt }]
+        : [];
+    });
+    const targetDriver = drivers.find((driver) => favorites.includes(driver.id)) ?? drivers[0];
+    const targetTeam = teams.find((team) => favorites.includes(team.id)) ?? teams[0];
+    updateGridlineWidgetData({
+      updatedAt: syncedAt ? Date.parse(syncedAt) : Date.now(),
+      races: widgetRaces,
+      driverTarget: targetDriver ? {
+        label: favorites.includes(targetDriver.id) ? '关注车手' : '车手榜首',
+        name: targetDriver.name,
+        position: targetDriver.position ?? drivers.indexOf(targetDriver) + 1,
+        points: targetDriver.points,
+        headshotUrl: targetDriver.headshotUrl,
+      } : null,
+      teamTarget: targetTeam ? {
+        label: favorites.includes(targetTeam.id) ? '关注车队' : '车队榜首',
+        name: targetTeam.name,
+        position: targetTeam.position ?? teams.indexOf(targetTeam) + 1,
+        points: targetTeam.points,
+        logoKey: teamLogoAliases[targetTeam.id] ?? targetTeam.id,
+      } : null,
+      drivers: drivers.slice(0, 3).map((driver, index) => ({ position: driver.position ?? index + 1, name: driver.name, points: driver.points })),
+      teams: teams.slice(0, 3).map((team, index) => ({ position: team.position ?? index + 1, name: team.short, points: team.points })),
+    });
+  }, [drivers, favorites, hasSeasonData, races, syncedAt, teams]);
+
+  const appReady = storageReady && fontsLoaded && (status !== 'loading' || hasSeasonData);
   return (
     <ThemeRevisionContext.Provider value={isDarkTheme}>
     <MotionPreferenceContext.Provider value={reduceMotion}>
-    <SafeAreaView style={[styles.safeArea, viewportWidth < 620 && styles.safeAreaMobile, !introComplete && { backgroundColor: C.ink }]}>
-      <StatusBar style={!introComplete || isDarkTheme ? 'light' : 'dark'} />
-      <View style={[styles.appRoot, viewportWidth < 620 && styles.appRootMobile, !introComplete && { backgroundColor: C.ink }]}>
+    <SafeAreaView style={[styles.safeArea, viewportWidth < 620 && styles.safeAreaMobile, !introComplete && { backgroundColor: isDarkTheme ? '#F5F6F7' : C.ink }]}>
+      <StatusBar style={introComplete ? (isDarkTheme ? 'light' : 'dark') : (isDarkTheme ? 'dark' : 'light')} />
+      <View style={[styles.appRoot, viewportWidth < 620 && styles.appRootMobile]}>
         {!driverDetailOpen ? <View style={[styles.rail, viewportWidth < 620 && styles.bottomNav]}>
           {viewportWidth >= 620 ? <View style={styles.brandMark}><Text style={styles.brandF}>F</Text><View style={styles.brandSlash} /></View> : null}
-          <View style={[styles.railNav, viewportWidth < 620 && styles.bottomNavItems]}>{navItems.map((item) => {
-            const active = !detail && section === item.id;
-            return <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={item.label} accessibilityState={{ selected: active }} onPress={() => goTo(item.id)} style={[styles.railItem, viewportWidth < 620 && styles.bottomNavItem, active && styles.railItemActive]}><Glyph path={item.icon} color={active ? C.red : '#747D86'} size={19} /><Text style={[styles.railLabel, viewportWidth < 620 && styles.bottomNavLabel, active && styles.railLabelActive]}>{item.label}</Text></Pressable>;
+          <View
+            onLayout={viewportWidth < 620 ? (event) => setBottomNavWidth(event.nativeEvent.layout.width) : undefined}
+            style={[styles.railNav, viewportWidth < 620 && [styles.bottomNavItems, { backgroundColor: isDarkTheme ? 'rgba(28, 31, 36, 0.76)' : 'rgba(255, 255, 255, 0.76)', borderColor: isDarkTheme ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255, 255, 255, 0.92)' }]]}
+          >
+            {viewportWidth < 620 ? <Animated.View
+              pointerEvents="none"
+              style={[styles.bottomNavGlassIndicator, {
+                width: bottomNavItemWidth,
+                opacity: bottomNavWidth > 0 ? 1 : 0,
+                backgroundColor: isDarkTheme ? 'rgba(255, 255, 255, 0.06)' : 'rgba(255, 255, 255, 0.58)',
+                borderColor: isDarkTheme ? 'rgba(255, 255, 255, 0.10)' : 'rgba(255, 255, 255, 0.96)',
+                shadowOpacity: isDarkTheme ? 0.08 : 0.55,
+                shadowRadius: isDarkTheme ? 3 : 5,
+                elevation: isDarkTheme ? 0 : 2,
+                transform: [{ translateX: bottomNavPosition.interpolate({ inputRange: navItems.map((_, index) => index), outputRange: navItems.map((_, index) => index * bottomNavItemWidth), extrapolate: 'clamp' }) }],
+              }]}
+            /> : null}
+            {navItems.map((item, index) => {
+              const active = viewportWidth < 620 ? section === item.id : !detail && section === item.id;
+              return <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={item.label} accessibilityState={{ selected: active }} onPress={() => goTo(item.id)} style={[styles.railItem, viewportWidth < 620 && styles.bottomNavItem, viewportWidth >= 620 && active && styles.railItemActive]}>
+                <Animated.View style={{ transform: [{ scale: viewportWidth < 620 ? bottomNavPosition.interpolate({ inputRange: [index - 1, index, index + 1], outputRange: [1, 1.13, 1], extrapolate: 'clamp' }) : 1 }] }}><Glyph path={item.icon} color={active ? C.red : '#747D86'} size={19} /></Animated.View>
+                <Text style={[styles.railLabel, viewportWidth < 620 && styles.bottomNavLabel, active && styles.railLabelActive]}>{item.label}</Text>
+              </Pressable>;
           })}</View>
           {viewportWidth >= 620 ? <View style={styles.railFooter}><View style={styles.railFooterLine} /><Text style={styles.railFooterText}>26</Text></View> : null}
         </View> : null}
@@ -2305,10 +2880,10 @@ function AppContent() {
               const page = item.id;
               const active = !detail && section === page;
               return (
-                <CachedSection key={page} active={active} ready={appReady} preloadDelay={index * 90}>
-                  {page === 'home' ? <CachedHomePage active={active} introComplete={introComplete} onOpenRace={openRace} onGoSchedule={goToSchedule} /> : null}
+                <CachedSection key={page} active={active} ready={appReady && introComplete} preloadDelay={750 + index * 90}>
+                  {page === 'home' ? <CachedHomePage active={active} introComplete={homeRevealStarted} onOpenRace={openRace} onGoSchedule={goToSchedule} /> : null}
                   {page === 'schedule' ? <CachedSchedulePage filter={scheduleFilter} onFilterChange={setScheduleFilter} onOpenRace={openRace} /> : null}
-                  {page === 'live' ? <CachedLiveTimingPage /> : null}
+                  {page === 'live' ? <CachedLiveTimingPage active={active} /> : null}
                   {page === 'favorites' ? <CachedFavoritesPage favorites={favorites} onToggle={toggleFavorite} onOpenRace={openRaceById} onOpenDriver={openDriver} onOpenTeam={openTeam} onGoLibrary={goToLibrary} /> : null}
                   {page === 'standings' ? <CachedStandingsPage tab={standingsTab} onTabChange={setStandingsTab} onOpenDriver={openDriver} onOpenTeam={openTeam} /> : null}
                   {page === 'library' ? <CachedLibraryPage favorites={favorites} onToggle={toggleFavorite} tab={libraryTab} onTabChange={setLibraryTab} onOpenDriver={openDriver} onOpenTeam={openTeam} onOpenTrack={openTrack} /> : null}
@@ -2326,7 +2901,7 @@ function AppContent() {
             }) : null}
           </View>
         </View>
-        {!introComplete ? <StartupIntro ready onDone={finishIntro} /> : null}
+        {!introComplete ? <StartupIntro ready={appReady} isDarkTheme={isDarkTheme} onRevealStart={startHomeReveal} onDone={finishIntro} /> : null}
       </View>
     </SafeAreaView>
     </MotionPreferenceContext.Provider>
@@ -2365,14 +2940,15 @@ const lightStyles = StyleSheet.create({
   routeLayerActive: { opacity: 1 },
   routeLayerHidden: { opacity: 0 },
   rail: { width: 70, backgroundColor: C.white, borderRightWidth: 1, borderRightColor: C.line, alignItems: 'center', paddingTop: 15, paddingBottom: 14 },
-  bottomNav: { width: '100%', height: 64, flexDirection: 'row', borderRightWidth: 0, borderTopWidth: 1, borderTopColor: C.line, alignItems: 'center', paddingHorizontal: 3, paddingTop: 3, paddingBottom: 3 },
+  bottomNav: { width: '100%', height: 76, flexDirection: 'row', borderRightWidth: 0, borderTopWidth: 0, backgroundColor: 'transparent', alignItems: 'center', paddingHorizontal: 11, paddingTop: 6, paddingBottom: 6 },
   brandMark: { width: 37, height: 37, backgroundColor: C.red, borderRadius: 11, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   brandF: { color: C.white, fontSize: 20, fontWeight: '900', fontStyle: 'italic', marginLeft: -3 },
   brandSlash: { position: 'absolute', height: 3, width: 20, backgroundColor: C.white, bottom: 10, right: 3, transform: [{ skewX: '-28deg' }] },
   railNav: { width: '100%', gap: 7, marginTop: 32 },
-  bottomNavItems: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 0, marginTop: 0 },
+  bottomNavItems: { flex: 1, width: '100%', position: 'relative', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', gap: 0, marginTop: 0, padding: 4, borderWidth: 1, borderRadius: 19, shadowColor: '#111820', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.12, shadowRadius: 12, elevation: 7 },
+  bottomNavGlassIndicator: { position: 'absolute', left: 4, top: 4, bottom: 4, borderWidth: 1, borderRadius: 14, shadowColor: '#FFFFFF', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.55, shadowRadius: 5, elevation: 2 },
   railItem: { width: 56, height: 58, borderRadius: 13, justifyContent: 'center', alignItems: 'center', alignSelf: 'center', gap: 4 },
-  bottomNavItem: { flex: 1, width: 'auto', height: 56, alignSelf: 'auto', gap: 2 },
+  bottomNavItem: { flex: 1, width: 'auto', height: 56, minWidth: 0, alignSelf: 'auto', gap: 2 },
   railItemActive: { backgroundColor: '#FFF0F2' },
   railLabel: { fontSize: 10, lineHeight: 14, color: '#7F8790', fontWeight: '500' },
   bottomNavLabel: { fontSize: 9, lineHeight: 12 },
@@ -2399,9 +2975,9 @@ const lightStyles = StyleSheet.create({
   liveHero: { backgroundColor: C.ink, borderRadius: 17, padding: 17, marginBottom: 22, overflow: 'hidden', borderTopWidth: 3, borderTopColor: C.red },
   liveHeroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   liveHeroKicker: { color: '#A9B0B7', fontSize: 8, fontWeight: '800', letterSpacing: 1.3 },
-  liveOfficialTag: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 20, backgroundColor: '#30343A' },
+  liveConnectionTag: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 20, backgroundColor: '#30343A' },
   liveOfficialDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.red },
-  liveOfficialTagText: { color: C.white, fontSize: 8, fontWeight: '700' },
+  liveConnectionTagText: { color: C.white, fontSize: 8, fontWeight: '700' },
   liveHeroTitle: { color: C.white, fontSize: 23, lineHeight: 29, fontWeight: '900', letterSpacing: -0.6, marginTop: 20 },
   liveHeroCopy: { color: '#C3C8CE', fontSize: 11, lineHeight: 17, marginTop: 6 },
   liveOpenButton: { minHeight: 42, paddingHorizontal: 13, borderRadius: 10, alignItems: 'center', justifyContent: 'space-between', flexDirection: 'row', backgroundColor: C.white, marginTop: 16 },
@@ -2409,17 +2985,37 @@ const lightStyles = StyleSheet.create({
   liveOpenArrow: { color: C.red, fontSize: 17, fontWeight: '800' },
   liveHeroFootnote: { color: '#929AA3', fontSize: 8, marginTop: 9 },
   liveSectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  liveSectionActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   liveSectionTitle: { color: C.ink, fontSize: 15, fontWeight: '800' },
   liveSectionSubtitle: { color: '#9AA2AA', fontSize: 7, fontWeight: '800', letterSpacing: 1.1, marginTop: 3 },
-  liveFeatureCard: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 14, paddingHorizontal: 12, marginBottom: 12 },
-  liveFeatureRow: { minHeight: 61, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  liveFeatureRowPressed: { opacity: 0.65 },
-  liveFeatureIcon: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#F3F5F6', alignItems: 'center', justifyContent: 'center' },
-  liveFeatureCopy: { flex: 1 },
-  liveFeatureTitle: { color: C.ink, fontSize: 11, fontWeight: '800' },
-  liveFeatureDetail: { color: C.muted, fontSize: 9, marginTop: 4 },
-  liveFeatureAction: { color: C.red, fontSize: 17, fontWeight: '700', paddingHorizontal: 3 },
-  liveFeatureDivider: { height: 1, backgroundColor: '#F0F1F2', marginLeft: 44 },
+  liveAccessRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  liveAccessInput: { flex: 1, minWidth: 0, minHeight: 42, paddingHorizontal: 10, borderWidth: 1, borderColor: C.line, borderRadius: 10, backgroundColor: C.white, color: C.ink, fontSize: 10 },
+  liveAccessConnectButton: { minWidth: 56, minHeight: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: C.red, paddingHorizontal: 12 },
+  liveAccessConnectText: { color: C.white, fontSize: 10, fontWeight: '800' },
+  liveKeyPersistenceMessage: { color: C.muted, fontSize: 9, lineHeight: 14, marginBottom: 12 },
+  liveReconnectButton: { minHeight: 34, justifyContent: 'center', paddingHorizontal: 11, borderRadius: 9, backgroundColor: C.white, borderWidth: 1, borderColor: C.line },
+  liveReconnectText: { color: C.red, fontSize: 10, fontWeight: '800' },
+  liveTimingCard: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 14, paddingHorizontal: 12, marginBottom: 12 },
+  liveTimingSummary: { minHeight: 57, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  liveTimingSummaryCopy: { flex: 1, minWidth: 0 },
+  liveTimingMeeting: { color: C.ink, fontSize: 12, fontWeight: '800' },
+  liveTimingSession: { color: C.muted, fontSize: 9, marginTop: 4 },
+  liveTimingLap: { color: C.red, fontSize: 10, fontWeight: '800' },
+  liveTrackStatus: { color: C.muted, fontSize: 9, paddingBottom: 10 },
+  liveDriverHeader: { minHeight: 29, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: C.line },
+  liveDriverHeaderPosition: { width: 29, color: C.muted, fontSize: 7, fontWeight: '800' },
+  liveDriverHeaderIdentity: { width: 86, color: C.muted, fontSize: 7, fontWeight: '800' },
+  liveDriverHeaderStats: { flex: 1, color: C.muted, fontSize: 7, fontWeight: '800', textAlign: 'right' },
+  liveDriverRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: '#F0F1F2' },
+  liveDriverPosition: { width: 29, color: C.ink, fontSize: 12, fontWeight: '900' },
+  liveDriverMarker: { width: 3, height: 31, borderRadius: 2, marginRight: 8 },
+  liveDriverIdentity: { width: 78, paddingRight: 5 },
+  liveDriverCode: { color: C.ink, fontSize: 10, fontWeight: '900' },
+  liveDriverTeam: { color: C.muted, fontSize: 7, marginTop: 3 },
+  liveDriverStats: { flex: 1, alignItems: 'flex-end', minWidth: 0 },
+  liveDriverGap: { color: C.ink, fontSize: 9, fontWeight: '800' },
+  liveDriverLap: { color: C.muted, fontSize: 7, marginTop: 2 },
+  liveEmptyState: { color: C.muted, fontSize: 10, lineHeight: 16, paddingVertical: 18, textAlign: 'center' },
   liveNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 11, borderRadius: 10, backgroundColor: '#FFF3F4' },
   liveNoticeMark: { width: 15, height: 15, borderRadius: 8, backgroundColor: '#F7DADD', alignItems: 'center', justifyContent: 'center', marginTop: 1 },
   liveNoticeMarkText: { color: C.red, fontSize: 9, lineHeight: 12, fontWeight: '800' },
@@ -2509,6 +3105,19 @@ const lightStyles = StyleSheet.create({
   settingsTitle: { color: C.ink, fontSize: 13, fontWeight: '800' },
   settingsDescription: { color: C.muted, fontSize: 10, marginTop: 3 },
   settingsHint: { color: C.muted, fontSize: 10, lineHeight: 15, marginTop: -9 },
+  updateModalRoot: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
+  updateModal: { width: '100%', maxWidth: 360, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 18, padding: 20, elevation: 16 },
+  updateModalHeading: { flexDirection: 'row', alignItems: 'center', gap: 11, marginBottom: 19 },
+  updateModalIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: '#FFF0F2' },
+  updateModalEyebrow: { color: C.ink, fontSize: 11, fontWeight: '800' },
+  updateModalStatus: { color: C.muted, fontSize: 9, marginTop: 3 },
+  updateModalTitle: { color: C.ink, fontSize: 20, lineHeight: 27, fontWeight: '900', letterSpacing: -0.4 },
+  updateModalMessage: { color: C.muted, fontSize: 12, lineHeight: 19, marginTop: 6 },
+  updateModalActions: { flexDirection: 'row', gap: 9, marginTop: 22 },
+  updateModalSecondary: { flex: 1, minHeight: 46, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: C.line, borderRadius: 11, backgroundColor: C.canvas, paddingHorizontal: 12 },
+  updateModalSecondaryText: { color: C.ink, fontSize: 12, fontWeight: '800' },
+  updateModalPrimary: { flex: 1, minHeight: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: C.red, paddingHorizontal: 12 },
+  updateModalPrimaryText: { color: C.white, fontSize: 12, fontWeight: '800' },
   seasonBadge: { minWidth: 49, height: 31, borderRadius: 9, borderWidth: 1, borderColor: C.line, backgroundColor: C.white, alignItems: 'center', justifyContent: 'center' },
   seasonBadgeText: { color: C.ink, fontSize: 12, fontWeight: '800' },
   demoNotice: { minHeight: 29, flexDirection: 'row', alignItems: 'center', marginBottom: 15, gap: 8 },
@@ -2651,7 +3260,7 @@ const lightStyles = StyleSheet.create({
   timeSession: { flex: 1.2 },
   timeSessionName: { color: C.ink, fontSize: 10, fontWeight: '700' },
   timeDay: { color: C.muted, fontSize: 8, marginTop: 3 },
-  timeValue: { flex: 1, color: C.ink, fontSize: 10, textAlign: 'center', fontWeight: '600' },
+  timeValue: { flex: 1, color: C.ink, fontSize: 10, textAlign: 'center', fontWeight: '600', fontVariant: ['tabular-nums'] },
   mapCard: { padding: 10, backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 14, marginBottom: 15 },
   trackStats: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: C.line, paddingTop: 12, marginTop: 5, justifyContent: 'space-between' },
   circuitFactsList: { borderTopWidth: 1, borderTopColor: C.line, marginTop: 13, paddingTop: 4 },
@@ -2704,6 +3313,13 @@ const lightStyles = StyleSheet.create({
   teamDriversGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
   profileDataCard: { backgroundColor: C.white, borderWidth: 1, borderColor: C.line, borderRadius: 14, paddingHorizontal: 13, paddingVertical: 12, marginBottom: 12 },
   profileDataTitle: { color: C.ink, fontSize: 11, fontWeight: '800', marginBottom: 12 },
+  driverRaceHistoryHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 },
+  driverRaceHistoryRow: { minHeight: 45 },
+  driverRaceHistoryRound: { width: 31, color: C.muted, fontSize: 8, fontWeight: '800' },
+  driverRaceHistoryResult: { minWidth: 38, alignItems: 'flex-end' },
+  driverRaceHistoryPosition: { color: C.red, fontSize: 11, fontWeight: '900' },
+  driverRaceHistoryStatus: { color: C.muted, fontSize: 8, marginTop: 2 },
+  driverRaceHistoryEmpty: { color: C.muted, fontSize: 9, paddingVertical: 10 },
   profileMetricGrid: { flexDirection: 'row', flexWrap: 'wrap', rowGap: 14 },
   profileMetric: { width: '33.333%', paddingRight: 5 },
   profileMetricValue: { color: C.ink, fontSize: 14, fontWeight: '900' },

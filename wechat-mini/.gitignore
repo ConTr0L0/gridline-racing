@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+
+# Local WeChat DevTools settings, caches, and recovery copies.
+project.private.config.json
+.swc/
+.codex-backup/
+minitest/
+RELEASE_READY.md

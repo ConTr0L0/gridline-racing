@@ -1,0 +1,8 @@
+<resources>
+  <color name="widget_ink">#171A1F</color>
+  <color name="widget_surface">#22262B</color>
+  <color name="widget_red">#E31C3D</color>
+  <color name="widget_text">#F5F6F7</color>
+  <color name="widget_muted">#AEB4BC</color>
+  <color name="widget_line">#383C42</color>
+</resources>

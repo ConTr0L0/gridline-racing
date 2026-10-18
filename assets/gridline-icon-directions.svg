@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1560" height="700" viewBox="0 0 1560 700" role="img" aria-labelledby="title description">
+  <title id="title">Gridline app icon directions</title>
+  <desc id="description">Three original abstract, animation-friendly motorsport icon marks: apex, chicane, and timing split.</desc>
+  <rect width="1560" height="700" fill="#0E1116"/>
+  <text x="70" y="40" fill="#A5ABB4" font-family="Segoe UI, sans-serif" font-size="17" font-weight="700" letter-spacing="2">GRIDLINE / ICON DIRECTIONS</text>
+  <path d="M70 58H125" stroke="#E31C3D" stroke-width="4"/>
+  <g id="apex-option" transform="translate(70 88)">
+    <rect width="400" height="400" rx="68" fill="#171A1F"/>
+    <path d="M72 312H151C175 312 193 299 204 273C216 245 225 220 235 202C259 148 300 112 354 91" fill="none" stroke="#F5F6F7" stroke-width="50" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M217 230 255 247" fill="none" stroke="#E31C3D" stroke-width="15" stroke-linecap="round"/>
+    <text x="0" y="450" fill="#F5F6F7" font-family="Microsoft YaHei UI, sans-serif" font-size="24" font-weight="600">A  弯心</text>
+    <text x="0" y="486" fill="#949BA5" font-family="Microsoft YaHei UI, sans-serif" font-size="16">一笔转向，红色切点</text>
+  </g>
+  <g id="chicane-option" transform="translate(580 88)">
+    <rect width="400" height="400" rx="68" fill="#171A1F"/>
+    <path d="M70 302H168C194 302 210 282 210 256V159C210 132 228 112 255 112H348" fill="none" stroke="#F5F6F7" stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M182 208H238" fill="none" stroke="#E31C3D" stroke-width="15" stroke-linecap="round"/>
+    <text x="0" y="450" fill="#F5F6F7" font-family="Microsoft YaHei UI, sans-serif" font-size="24" font-weight="600">B  折线</text>
+    <text x="0" y="486" fill="#949BA5" font-family="Microsoft YaHei UI, sans-serif" font-size="16">连续切角，偏技术感</text>
+  </g>
+  <g id="split-option" transform="translate(1090 88)">
+    <rect width="400" height="400" rx="68" fill="#171A1F"/>
+    <g fill="none" stroke="#F5F6F7" stroke-width="22" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M62 125H143C196 125 213 152 254 179L321 201"/>
+      <path d="M62 210H321"/>
+      <path d="M62 295H143C196 295 213 268 254 241L321 219"/>
+    </g>
+    <path d="M337 176V244" stroke="#E31C3D" stroke-width="18" stroke-linecap="round"/>
+    <text x="0" y="450" fill="#F5F6F7" font-family="Microsoft YaHei UI, sans-serif" font-size="24" font-weight="600">C  计时门</text>
+    <text x="0" y="486" fill="#949BA5" font-family="Microsoft YaHei UI, sans-serif" font-size="16">多条轨迹收束到分段点</text>
+  </g>
+</svg>
